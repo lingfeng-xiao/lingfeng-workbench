@@ -83,7 +83,7 @@
   - 在临时 D1 空库验证首次建表、旧版本升级和重复迁移；不连接生产 D1。
   - 使用 Runtime Fixture 验证协议、幂等、审批和断线场景，不连接办公 Node。
   - 扫描 secret、绝对路径、数据库/日志/缓存/环境文件等禁止内容，命中即失败。
-  - 云端构建 Node 包并验证 manifest/hash；另验证 Windows Node 兼容性，办公电脑不参与。
+  - 云端构建 Node 包并验证 manifest/hash；同一合同分别验证 Linux Node 与 Windows Node 兼容性，办公电脑不参与。
   - 所有检查结果绑定 PR commit，任一失败均不能视为通过。
   - 普通 PR 身份无生产凭证、生产部署权、Release 发布权或数据写入权。
 - 依赖：102。
@@ -251,7 +251,7 @@
 - 可验证 AC：
   - 四类数据可选；未声明默认 local-only；不做自动脱敏；secret 永不成为 Artifact 内容。
   - cloud-safe 只允许：Workbench 自身设计文档、Workbench 自身测试报告、Workbench 页面截图、合成 Fixture、用户明确确认安全的导出文件。
-  - 公司完整报告、完整日志、公司代码和 Runtime 原始对话始终为 local-only，不能因自动处理或摘要标签上云。
+  - 公司代码及 diff、原始日志/SQL/数据库导出、客户或生产数据、完整业务测试或构建报告、Runtime 原始事件与对话、办公电脑绝对路径及任何未明确分类数据始终为 local-only，不能因自动处理或摘要标签上云。
   - R2 只承载上述明确 cloud-safe 内容；Node 签名发布包不进入 R2 分发链。
   - 分类、用户确认、来源、hash 和关联对象随 ArtifactReference 可审计；不符合 allowlist 的上传被拒绝。
 - 依赖：302、303。
@@ -285,7 +285,7 @@
   - ACK 必须回显同一投递 ID；错误 Node、错误 Run 或旧决定版本的 ACK 被拒绝。
   - ACK 丢失时重投相同 ID 和相同载荷，不生成第二次业务决定。
   - ACK 重复或延迟到达只返回既有结果，不回退后续状态。
-  - 重复 ACK 的业务推进、副作用和重复推进计数均为 0；只允许增加幂等命中审计。
+  - 重复 ACK 的业务推进、执行、副作用以及重复推进/执行计数均为 0；只允许增加幂等命中审计。
 - 依赖：405。
 - 最低证据：协议测试、丢包重试和重复确认测试。
 - 风险：用户看到已批准但 Node 未收到。
@@ -547,7 +547,7 @@
   - 只对唯一 Lingfeng Workbench Site 创建 saved version，不创建第二套长期 Workbench 环境。
   - saved version 绑定已合并 commit、云 CI run、构建产物和设计/实现范围。
   - merge main 不自动部署；用户必须明确批准精确 commit 与精确 saved version，Proposal 接受或 PR 合并不能替代。
-  - 发布前建立可回读的数据库恢复点/快照；若平台只有逻辑导出，必须先满足 206 的真实恢复验收。
+  - 发布前建立可回读的 D1 快照或等价恢复点；若平台只支持逻辑导出，必须先满足 206 的真实恢复验收，不能用 dry-run 代替。
   - 发布记录同时保存 PR、commit、Sites saved/deployment version、schema version 和回滚点。
   - Agent、Node 和仓库均不持有可复用生产密钥；部署通过受控平台调用面完成。
   - 部署后进入明确观察窗口，回读版本、身份、health/work-items、静态资源、Worker events 和错误；失败不覆盖最后已知良好版本。
