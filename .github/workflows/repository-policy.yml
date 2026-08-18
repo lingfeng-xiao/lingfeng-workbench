@@ -1,0 +1,50 @@
+name: repository-policy
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repository-policy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repository-policy:
+    name: repository-policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch all branches and tags
+        run: >-
+          git fetch --force --prune --no-recurse-submodules origin
+          '+refs/heads/*:refs/remotes/origin/*'
+          '+refs/tags/*:refs/tags/*'
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run repository policy tests
+        run: python -m unittest discover -s tests/repository_policy -p "test_*.py" -v
+
+      - name: Verify recovery provenance and current public boundary
+        run: python -m tools.repository_policy.policy --repository .
+
+      - name: Scan all reachable Git history
+        run: python -m tools.repository_policy.policy --repository . --scan-history
+
+      - name: Deliberate negative control
+        if: ${{ github.event_name == 'push' && contains(github.event.head_commit.message, '[negative-control]') }}
+        run: python -m tools.repository_policy.policy --negative-control
