@@ -83,5 +83,10 @@ jobs:
         run: python -m tools.repository_policy.policy --repository . --scan-history
 
       - name: Deliberate negative control
-        if: ${{ github.event_name == 'push' && contains(github.event.head_commit.message, '[negative-control]') }}
+        if: >-
+          ${{
+            github.event_name == 'push' &&
+            github.ref == 'refs/heads/codex/w0-a-repository-governance' &&
+            contains(github.event.head_commit.message, '[negative-control]')
+          }}
         run: python -m tools.repository_policy.policy --negative-control
