@@ -236,41 +236,65 @@ def scan_current_tree(repository: Path) -> list[Finding]:
     return findings
 
 
-def iter_reachable_blobs(repository: Path) -> Iterable[tuple[str, str]]:
-    object_lines = run_git(repository, "rev-list", "--objects", "--all")
-    seen_object_ids: set[str] = set()
-    for raw_line in object_lines.splitlines():
-        object_id_bytes, _, path_bytes = raw_line.partition(b" ")
-        object_id = object_id_bytes.decode("ascii")
-        if object_id in seen_object_ids:
-            continue
-        seen_object_ids.add(object_id)
-        object_type = (
-            run_git(repository, "cat-file", "-t", object_id)
-            .decode("ascii")
-            .strip()
+def parse_tree_entry(raw_entry: bytes) -> tuple[str, str, int] | None:
+    metadata_bytes, separator, path_bytes = raw_entry.partition(b"\t")
+    metadata_parts = metadata_bytes.split()
+    if not separator or len(metadata_parts) != 4:
+        raise PolicyExecutionError("invalid reachable tree entry")
+
+    _, object_type_bytes, object_id_bytes, size_bytes = metadata_parts
+    if object_type_bytes != b"blob":
+        return None
+    if not re.fullmatch(rb"[0-9a-f]{40,64}", object_id_bytes):
+        raise PolicyExecutionError("invalid reachable blob identifier")
+    if not size_bytes.isdigit():
+        raise PolicyExecutionError("invalid reachable blob size")
+
+    object_id = object_id_bytes.decode("ascii")
+    path = path_bytes.decode("utf-8", errors="surrogateescape")
+    return object_id, path, int(size_bytes)
+
+
+def iter_reachable_blobs(repository: Path) -> Iterable[tuple[str, str, int]]:
+    commit_lines = run_git(repository, "rev-list", "--all")
+    seen_path_objects: set[tuple[str, str]] = set()
+    for commit_id_bytes in commit_lines.splitlines():
+        commit_id = commit_id_bytes.decode("ascii")
+        tree_entries = run_git(
+            repository,
+            "ls-tree",
+            "-rlz",
+            "--full-tree",
+            commit_id,
         )
-        if object_type != "blob":
-            continue
-        path = path_bytes.decode("utf-8", errors="surrogateescape")
-        yield object_id, path or f"object:{object_id}"
+        for raw_entry in tree_entries.split(b"\0"):
+            if not raw_entry:
+                continue
+            parsed_entry = parse_tree_entry(raw_entry)
+            if parsed_entry is None:
+                continue
+            object_id, path, size_bytes = parsed_entry
+            path_object = (object_id, path)
+            if path_object in seen_path_objects:
+                continue
+            seen_path_objects.add(path_object)
+            yield object_id, path, size_bytes
 
 
 def scan_reachable_history(repository: Path) -> list[Finding]:
     findings: list[Finding] = []
-    for object_id, path in iter_reachable_blobs(repository):
-        size_bytes = int(
-            run_git(repository, "cat-file", "-s", object_id)
-            .decode("ascii")
-            .strip()
-        )
+    scanned_content_objects: set[str] = set()
+    for object_id, path, size_bytes in iter_reachable_blobs(repository):
         location = f"{path}@{object_id[:12]}"
         findings.extend(scan_path_policy(path, size_bytes, location))
-        if size_bytes <= MAX_PUBLIC_BLOB_BYTES:
+        if (
+            object_id not in scanned_content_objects
+            and size_bytes <= MAX_PUBLIC_BLOB_BYTES
+        ):
+            scanned_content_objects.add(object_id)
             blob_bytes = run_git(repository, "cat-file", "blob", object_id)
             findings.extend(scan_bytes(location, blob_bytes))
     return findings
-
 
 def run_negative_control() -> int:
     synthetic_token = b"gh" + b"p_" + (b"A" * 36)

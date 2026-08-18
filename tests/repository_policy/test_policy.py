@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 from tools.repository_policy.policy import (
     MAX_PUBLIC_BLOB_BYTES,
     PolicyExecutionError,
     Finding,
     format_finding,
+    iter_reachable_blobs,
     parse_recovery_manifest,
     sanitize_location,
     scan_bytes,
@@ -75,6 +78,53 @@ class RepositoryPolicyTests(unittest.TestCase):
         self.assertEqual(
             [Finding("forbidden-file-type", report_location)],
             findings,
+        )
+
+    def test_history_keeps_every_path_for_a_reused_blob(self) -> None:
+        blob_id = "a" * 40
+        first_commit = "1" * 40
+        second_commit = "2" * 40
+
+        def fake_run_git(
+            repository: Path,
+            *arguments: str,
+        ) -> bytes:
+            self.assertEqual(Path("."), repository)
+            if arguments == ("rev-list", "--all"):
+                return f"{first_commit}\n{second_commit}\n".encode("ascii")
+            if arguments == (
+                "ls-tree",
+                "-rlz",
+                "--full-tree",
+                first_commit,
+            ):
+                path = "archive/readme.txt"
+            elif arguments == (
+                "ls-tree",
+                "-rlz",
+                "--full-tree",
+                second_commit,
+            ):
+                path = "archive/private.pem"
+            else:
+                self.fail(f"unexpected git arguments: {arguments}")
+            return (
+                f"100644 blob {blob_id} 128\t{path}".encode("utf-8")
+                + b"\0"
+            )
+
+        with patch(
+            "tools.repository_policy.policy.run_git",
+            side_effect=fake_run_git,
+        ):
+            reachable_blobs = list(iter_reachable_blobs(Path(".")))
+
+        self.assertEqual(
+            [
+                (blob_id, "archive/readme.txt", 128),
+                (blob_id, "archive/private.pem", 128),
+            ],
+            reachable_blobs,
         )
 
     def test_manifest_rejects_parent_traversal(self) -> None:
