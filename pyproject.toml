@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lingfeng-workbench"
+version = "0.1.0"
+description = "Hermes control plane and office-PC agent runtime node"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+lingfeng-node = "lingfeng_workbench.node.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["lingfeng_workbench*"]
+
