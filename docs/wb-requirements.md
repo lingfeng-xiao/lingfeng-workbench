@@ -44,11 +44,11 @@
 
 ### WB-101 建立个人私有 GitHub 仓库
 - 业务描述：建立源码唯一事实源并保留恢复历史原点。
-- 可验证 AC：直接回读 Private、默认 main、首个且唯一恢复 commit、恢复 tag；另证明 GitHub App 仅授权该仓库。
+- 可验证 AC：直接回读 Private、默认 main、首个且唯一恢复 commit、恢复 tag；Workbench 自动化身份与生产身份必须 repo-scoped，只能访问 `lingfeng-workbench`，并通过对其他仓库的安全负向验证；用户通用 GitHub 插件不属于 Workbench 生产身份，可保留现有账号级安装范围。
 - 依赖：003。
-- 最低证据：仓库 API、27 文件恢复树、commit 列表、annotated tag 与 peeled commit、deploy keys、办公仓库 remote、App 安装范围。
-- 风险：仓库暴露、unrelated history 或 App 权限过宽。
-- 回滚边界：不改首 commit/tag；只撤销后续分支或 App 授权。
+- 最低证据：仓库 API、27 文件恢复树、commit 列表、annotated tag 与 peeled commit、deploy keys、办公仓库 remote、Workbench 身份清单/权限回读及跨仓库拒绝记录；同时记录用户通用插件与 Workbench 生产身份的隔离关系。
+- 风险：仓库暴露、unrelated history，或 Workbench 自动化/生产身份误用可访问其他仓库的共享用户插件，形成越权与横向影响。
+- 回滚边界：不改首 commit/tag；撤销或轮换 Workbench 自动化/生产身份并停止相关任务，不要求收窄或撤销用户通用 GitHub 插件。
 - 初始状态：不完整。
 
 ### WB-102 配置仓库保护
@@ -155,7 +155,7 @@
   - 同一迁移在已完成状态下重复执行幂等，不重复建表、重复写数据或改变结果。
   - 中途失败不留下可被误判为完成的半迁移状态，恢复路径和错误可解释。
 - 依赖：202。
-- 最低证据：迁移日志、schema 版本和失败回滚演练；当前仅能回读 D1 binding=`DB` 与 16 张表的清单，不能证明 schema version、迁移历史或迁移回放。
+- 最低证据：迁移日志、schema 版本和失败回滚演练；当前已回读 D1 binding=`DB`、16 张表，以及 `schema_migrations(version, checksum, applied_at, description)` 中唯一基线记录 `0000_gate0`（`applied_at=2026-08-18 09:11:33`，描述为 `Initial Lingfeng Workbench control-plane schema`，checksum 可回读），但尚未验收空库从零、旧版合成数据升级、重复执行幂等、未知/跳号/篡改拒绝、失败不留半迁移和恢复路径。
 - 风险：不可逆 schema 或手工漂移。
 - 回滚边界：按迁移合同回退应用/逻辑恢复；不预定 ORM。
 - 初始状态：不完整。
@@ -178,7 +178,7 @@
 - 业务描述：出现应用问题时可恢复上一已知良好版本而不改写业务历史。
 - 可验证 AC：版本可枚举；回滚后身份和健康检查正常；D1/R2 不被覆盖。
 - 依赖：204、205。
-- 最低证据：隔离回滚演练及前后版本 ID；当前仅能回读 v3 saved-version 的来源 commit/archive 元数据，不能证明部署成功或应用回滚。
+- 最低证据：隔离回滚演练及前后版本 ID；当前已直接回读 production deployment `status=succeeded`，其绑定 v3 与生产 URL，v3 来源 commit 为 `e1da93de2c3795c4de227fc140affe0b63ca1ca7` 且 archive 可回读，但尚未验收应用实际回滚、回滚后的身份/health 与观察窗口。
 - 风险：应用/schema 不兼容。
 - 回滚边界：只切应用版本；数据导出与恢复另走 206。
 - 初始状态：不完整。
@@ -555,7 +555,7 @@
   - 支持通过 Sites 外部控制面回滚，不依赖当前故障应用自身的管理 API。
   - custom/private 身份 Gate 未通过时不得以成功部署记录宣告 Gate 0 或路由健康。
 - 依赖：102～105、201～208。
-- 最低证据：发布记录、Gate、部署版本和回滚点；当前仅能回读 v3 saved-version 的来源 commit/archive 元数据，尚无部署成功、GitHub/CI/Gate 或回滚追溯证据。
+- 最低证据：发布记录、Gate、部署版本和回滚点；当前已直接回读 production deployment `status=succeeded`，其绑定 v3、生产 URL 与来源 commit `e1da93de2c3795c4de227fc140affe0b63ca1ca7`，archive 可回读，但尚未形成完整 commit→CI→Gate→deployment 追溯，也未验收生产身份、health/静态资源、观察窗口、恢复点和应用回滚。
 - 风险：未批准部署或版本与源码不一致。
 - 回滚边界：切回上一 Sites 版本；数据恢复独立处理。
 - 初始状态：不完整。
