@@ -88,6 +88,48 @@ class RepositoryPolicyTests(unittest.TestCase):
             {finding.rule_id for finding in findings},
         )
 
+    def test_rejects_raw_database_export_suffixes(self) -> None:
+        forbidden_paths = (
+            "exports/database.sql",
+            "exports/database.db",
+            "exports/database.dump",
+            "exports/database.bak",
+            "exports/database.backup",
+        )
+
+        for path in forbidden_paths:
+            with self.subTest(path=path):
+                self.assertEqual(
+                    [Finding("forbidden-file-type", path)],
+                    scan_path_policy(path, 128),
+                )
+
+    def test_accepts_declared_workbench_migration_sql(self) -> None:
+        findings = scan_path_policy(
+            "migrations/gate0/0001_create_control_plane.sql",
+            128,
+        )
+
+        self.assertEqual([], findings)
+
+    def test_rejects_encrypted_and_pgp_private_key_headers(self) -> None:
+        private_key_headers = (
+            b"-----BEGIN "
+            + b"ENCRYPTED "
+            + b"PRIVATE KEY-----",
+            b"-----BEGIN "
+            + b"PGP PRIVATE KEY "
+            + b"BLOCK-----",
+        )
+
+        for private_key_header in private_key_headers:
+            with self.subTest(private_key_header=private_key_header):
+                findings = scan_bytes("synthetic://private-key", private_key_header)
+                self.assertIn(
+                    "private-key",
+                    {finding.rule_id for finding in findings},
+                )
+
     def test_historical_suffix_uses_original_path(self) -> None:
         report_location = "archive/private.pem@0123456789ab"
 

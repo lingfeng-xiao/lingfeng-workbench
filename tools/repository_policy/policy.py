@@ -21,7 +21,8 @@ CONTENT_RULES: tuple[tuple[str, re.Pattern[bytes]], ...] = (
     (
         "private-key",
         re.compile(
-            rb"-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----",
+            rb"-----BEGIN (?:(?:RSA |EC |OPENSSH |DSA |ENCRYPTED )?"
+            rb"PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----",
             re.IGNORECASE,
         ),
     ),
@@ -73,7 +74,13 @@ FORBIDDEN_NAMES = {
     "id_rsa",
     "id_ed25519",
 }
+ALLOWED_PUBLIC_SQL_PREFIXES = ("migrations/gate0/",)
+
 FORBIDDEN_SUFFIXES = {
+    ".backup",
+    ".bak",
+    ".db",
+    ".dump",
     ".har",
     ".key",
     ".log",
@@ -214,7 +221,18 @@ def scan_path_policy(
     path_name = PurePosixPath(path).name.lower()
     if path_name in FORBIDDEN_NAMES or path_name.startswith(".env."):
         findings.append(Finding("forbidden-file-name", location))
-    if PurePosixPath(path_name).suffix in FORBIDDEN_SUFFIXES:
+    path_suffix = PurePosixPath(path_name).suffix
+    is_allowed_sql_source = (
+        path_suffix == ".sql"
+        and any(
+            path.startswith(prefix)
+            for prefix in ALLOWED_PUBLIC_SQL_PREFIXES
+        )
+    )
+    if (
+        (path_suffix == ".sql" and not is_allowed_sql_source)
+        or path_suffix in FORBIDDEN_SUFFIXES
+    ):
         findings.append(Finding("forbidden-file-type", location))
     if size_bytes > MAX_PUBLIC_BLOB_BYTES:
         findings.append(Finding("oversized-public-blob", location))

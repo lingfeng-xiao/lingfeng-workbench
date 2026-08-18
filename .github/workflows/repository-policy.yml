@@ -26,37 +26,52 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Fetch all branches and tags
+      - name: Fetch all branches, tags, and pull request refs
         run: >-
           git fetch --force --prune --no-recurse-submodules origin
           '+refs/heads/*:refs/remotes/origin/*'
           '+refs/tags/*:refs/tags/*'
+          '+refs/pull/*/head:refs/remotes/pull/*/head'
+          '+refs/pull/*/merge:refs/remotes/pull/*/merge'
 
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.11"
 
-      - name: Prove cross-repository control-plane denial
+      - name: Verify repository-scoped automation identity
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          scope_file="$(mktemp)"
+          trap 'rm -f "${scope_file}"' EXIT
           status="$(
-            curl --silent --show-error --output /dev/null \
+            curl --silent --show-error --output "${scope_file}" \
               --write-out '%{http_code}' \
               --header "Authorization: Bearer ${GH_TOKEN}" \
               --header "Accept: application/vnd.github+json" \
-              https://api.github.com/repos/lingfeng-xiao/GoodMnze.github.io/actions/secrets/public-key
+              --header "X-GitHub-Api-Version: 2022-11-28" \
+              https://api.github.com/installation/repositories
           )"
-          case "${status}" in
-            403|404)
-              echo "cross-repository control-plane access denied"
-              ;;
-            *)
-              echo "cross-repository denial check failed with status ${status}" >&2
-              exit 1
-              ;;
-          esac
+          if [ "${status}" != "200" ]; then
+            echo "repository scope introspection failed with status ${status}" >&2
+            exit 1
+          fi
+          python - "${scope_file}" "${GITHUB_REPOSITORY}" <<'PY'
+          import json
+          import sys
+
+          scope_path, expected_repository = sys.argv[1:]
+          with open(scope_path, encoding="utf-8") as scope_stream:
+              scope = json.load(scope_stream)
+          repositories = scope.get("repositories")
+          if not isinstance(repositories, list):
+              raise SystemExit("repository scope response was invalid")
+          full_names = [repository.get("full_name") for repository in repositories]
+          if scope.get("total_count") != 1 or full_names != [expected_repository]:
+              raise SystemExit("repository automation identity exceeded one repository")
+          print("repository automation identity is scoped to this repository")
+          PY
 
       - name: Run repository policy tests
         run: python -m unittest discover -s tests/repository_policy -p "test_*.py" -v

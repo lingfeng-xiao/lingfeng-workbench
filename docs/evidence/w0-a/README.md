@@ -13,7 +13,7 @@
 The `repository-policy` workflow uses only the repository-scoped
 `GITHUB_TOKEN` with `contents: read`. It:
 
-1. fetches every branch and tag;
+1. fetches every branch, tag, and advertised pull-request head/merge ref;
 2. verifies the recovery tag, root commit, 25 manifest entries, and recovered
    file hashes against the immutable recovery commit;
 3. verifies the recovery manifest and note were not changed;
@@ -33,6 +33,20 @@ deliberately failing run URLs and commit SHAs in the PR conversation.
 Branch-protection binding, safe direct-push/force/delete/bypass probes, and
 cross-repository denial remain separate control-plane evidence. They must not
 be inferred from unit tests.
+
+## Detection limits
+
+This workflow is a post-push enforcement control for known signatures and
+forbidden file types. It does not prove that signatureless company code,
+generic JSON/CSV exports, Runtime conversations, or other unclassified content
+is safe. Submitters and reviewers must classify content before commit; unknown
+content remains local-only. GitHub Secret Scanning, Push Protection, and human
+review are complementary controls rather than evidence that this denylist can
+prevent every disclosure.
+
+The automation identity scope is verified by reading the installation's
+accessible-repository set and asserting that it contains only this repository.
+The response body is parsed on the runner and is never printed.
 
 ## Rollback boundary
 
