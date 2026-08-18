@@ -42,28 +42,28 @@
 
 ## P1 GitHub 与云开发
 
-### WB-101 建立个人私有 GitHub 仓库
+### WB-101 建立个人公开 GitHub 仓库
 - 业务描述：建立源码唯一事实源并保留恢复历史原点。
-- 可验证 AC：直接回读 Private、默认 main、首个且唯一恢复 commit、恢复 tag；Workbench 自动化身份与生产身份必须 repo-scoped，只能访问 `lingfeng-workbench`，并通过对其他仓库的安全负向验证；用户通用 GitHub 插件不属于 Workbench 生产身份，可保留现有账号级安装范围。
+- 可验证 AC：直接回读 Public、默认 main、首个且唯一恢复 commit、恢复 tag；仓库及可达历史只含 Workbench 源码、适合公开的安全设计/文档和明确发布资产，公开内容扫描不含 secret、local-only、公司代码/日志/SQL/生产数据或办公电脑绝对路径；Workbench 自动化身份与生产身份必须 repo-scoped，只能访问 `lingfeng-workbench`，并通过对其他仓库的安全负向验证；用户通用 GitHub 插件不属于 Workbench 生产身份，可保留现有账号级安装范围。
 - 依赖：003。
-- 最低证据：仓库 API、27 文件恢复树、commit 列表、annotated tag 与 peeled commit、deploy keys、办公仓库 remote、Workbench 身份清单/权限回读及跨仓库拒绝记录；同时记录用户通用插件与 Workbench 生产身份的隔离关系。
-- 风险：仓库暴露、unrelated history，或 Workbench 自动化/生产身份误用可访问其他仓库的共享用户插件，形成越权与横向影响。
+- 最低证据：仓库 API、27 文件恢复树、commit 列表、annotated tag 与 peeled commit、全部 refs/可达历史公开内容扫描、deploy keys、办公仓库 remote、Workbench 身份清单/权限回读及跨仓库拒绝记录；同时记录用户通用插件与 Workbench 生产身份的隔离关系。
+- 风险：公开仓库历史夹带不适合公开的内容、unrelated history，或 Workbench 自动化/生产身份误用可访问其他仓库的共享用户插件，形成越权与横向影响。
 - 回滚边界：不改首 commit/tag；撤销或轮换 Workbench 自动化/生产身份并停止相关任务，不要求收窄或撤销用户通用 GitHub 插件。
 - 初始状态：不完整。
 
 ### WB-102 配置仓库保护
 - 业务描述：确保 main 只能经评审和通过检查的 PR 更新。
-- 可验证 AC：保护/规则集可回读；直接 push 与绕过必需检查的负向验证被拒绝。
+- 可验证 AC：保护/规则集可回读；强制 PR、管理员同样受约束、陈旧评审撤销、线性历史、禁止 force push/删除、必须解决会话；required CI checks 已配置并通过；直接 push 与绕过必需检查的负向验证被拒绝；保护规则与 Workbench repo-scoped 身份完成组合验收。
 - 依赖：101。
-- 最低证据：规则 API 与安全的负向验证记录。
-- 风险：GitHub Free 私有仓库的 branch protection/ruleset API 返回 403；公开仓库不允许，流程约束不能冒充强制保护。
+- 最低证据：规则 API、required checks、Workbench 身份权限回读与安全的 direct push/绕过负向验证记录；当前已回读基础保护，但 `required_status_checks=null`，且真实负向验证与身份组合验收尚缺。
+- 风险：基础保护存在但未绑定 CI，或管理员/自动化身份仍可绕过，导致规则回读与实际强制效果不一致。
 - 回滚边界：规则变更可单独撤销，不改历史和 tag。
-- 初始状态：缺失。
+- 初始状态：不完整。
 
 ### WB-103 建立 Codex Cloud 环境
 - 业务描述：让开发只在授权云环境发生，办公电脑不参与构建。
 - 可验证 AC：
-  - 环境只绑定目标私有仓库，并从指定 main commit 创建隔离任务和可追溯分支。
+  - 环境只绑定目标公开仓库，并从指定 main commit 创建隔离任务和可追溯分支。
   - Python、Node 和所用包管理器版本固定且可回读；fresh checkout 使用同一版本组合。
   - 仓库提供可重复的 setup 与 maintenance 命令，fresh checkout 能完成 install 和最低 check。
   - 根 `AGENTS.md` 冻结范围、数据边界、用户 Gate、证据和禁止自动部署合同，并被任务实际读取。
@@ -470,7 +470,7 @@
 ### WB-601 云端生成 Node 发布包
 - 业务描述：只在云 CI 从 GitHub commit 构建可安装 Node 包。
 - 可验证 AC：
-  - 云 CI 从 GitHub 私有仓库的明确 commit 做干净 checkout 并构建，办公电脑不参与。
+  - 云 CI 从 GitHub 公开仓库的明确 commit 做干净 checkout 并构建，办公电脑不参与。
   - 构建输入、依赖来源、工具版本和 CI run 可回读，不使用未提交本地文件。
   - 发布包包含版本、目标平台、来源 commit、CI run 和文件 manifest。
   - manifest 为每个受管文件记录路径、大小和 hash，并生成发布包整体 hash。
@@ -568,7 +568,7 @@
   - 从用户批准需求开始，云任务基于指定 main commit 创建隔离分支。
   - 代码/文档修改、构建、测试和评审全部在 Codex Cloud/云 CI 完成。
   - PR 可追溯到需求、分支、commit、CI run、评审和用户 Gate。
-  - 失败检查或缺少必要评审时不能合并；若套餐无法强制保护，验收明确失败而非用流程冒充。
+  - 失败检查、缺少 required checks、必要评审或保护规则实际强制证据时不能合并；验收明确失败而非用部分规则或流程约定冒充。
   - 公司电脑仓库无 remote，不承担开发、构建、测试或 push。
   - main、恢复首 commit 和恢复 tag 在验收前后保持预期不变。
 - 依赖：101～105。

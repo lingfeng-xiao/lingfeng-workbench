@@ -8,9 +8,10 @@
 
 | 证据 | 能证明 | 不能证明 |
 |---|---|---|
-| GitHub 仓库与 refs 回读 | 仓库为 Private；main 唯一 commit 为 `968b88d9f869b0ed7a42c91e67c911f2c1e5b36c`；annotated tag `v0.1.0-server-recovered` 解引用同一 commit；恢复树共 27 个文件 | Workbench 自动化/生产身份是否已独立 repo-scoped、未来 refs 不被改变、CI 是否有效 |
+| GitHub 仓库、refs 与公开前扫描回读 | 仓库为 Public、默认分支为 `main`；main 与 annotated tag `v0.1.0-server-recovered` 均仍指向 `968b88d9f869b0ed7a42c91e67c911f2c1e5b36c`；公开前扫描覆盖 main、PR 修改前 head `107c80da6db11411f411810423ca273072b51cc7` 的当前 32 个 unique blobs 及 PR 24 个历史 patches，未发现 secret/token/cookie/连接串、公司标识、内部域名、IP、邮箱、大文件或二进制，仅发现 4 处不含凭证的 `/home/lingfeng/...` Hermes 服务端路径，评估为低风险 | Workbench 自动化/生产身份是否已独立 repo-scoped、未来 refs 不被改变、CI 是否有效；扫描结论不替代后续每次提交的公开内容检查 |
 | GitHub 身份与办公仓库回读 | 用户共享 GitHub App installation ID `154558775` 可访问账号全部 48 个仓库；该通用用户插件不属于 Workbench 生产身份且无需收窄；临时 Hermes 写 Deploy Key 在首推后已撤销，当前 deploy keys 为空；公司电脑本地仓库没有 remote | Workbench 自动化/生产身份已经独立建立且只能访问 `lingfeng-workbench`、公司电脑不存在其他凭证或替代代码副本 |
-| 当前云任务与 Draft PR 回读 | ChatGPT Work cloud task 已从固定 main 建立独立分支和 Draft PR #1 | 完整 Codex Cloud environment、官方环境配置、云 CI 或保护规则已建立；当前官方页面无法回读，尚无官方环境证据 |
+| main 保护规则直接回读 | `enforce_admins=true`；要求 PR；`required_approving_review_count=0`；`dismiss_stale_reviews=true`；`required_linear_history=true`；`allow_force_pushes=false`；`allow_deletions=false`；`required_conversation_resolution=true` | `required_status_checks=null`，尚无 CI workflow；真实 direct push 与绕过负测尚未执行；保护规则与 Workbench 身份尚未完成组合验收，因此 WB-102 仅为不完整 |
+| 当前云任务与 Draft PR 回读 | ChatGPT Work cloud task 已从固定 main 建立独立分支和 Draft PR #1 | 完整 Codex Cloud environment、官方环境配置或云 CI 已建立；当前官方页面无法回读，尚无官方环境证据 |
 | `SERVER_RECOVERY.md` | 恢复来源、24+1 范围、排除项、恢复时扫描结论 | 当前运行环境、当前测试通过、生产数据状态 |
 | `RECOVERY_MANIFEST.sha256` | 25 个受管文件的预期哈希与文件名 | 当前仓库全树没有额外文件；源服务器仍保有同一副本 |
 | 恢复源码 | v0.1 的对象、协议、幂等与审批行为设计 | v0.2 的 D1/R2、Sites、发布与回滚已实现 |
@@ -24,7 +25,7 @@
 |---|---|---|---|
 | 用户通用 GitHub 插件可访问账号全部 48 个仓库，不能作为 Workbench 自动化/生产身份；当前尚无 Workbench 专用 repo-scoped 身份及跨仓拒绝证据 | WB-101 仍不能整体标已证；不要求收窄共享用户插件 | 建立并回读只访问 `lingfeng-workbench` 的 Workbench 自动化/生产身份，列出身份隔离关系，并安全验证其访问其他仓库被拒绝 | 仓库治理 |
 | 当前仓库无完整 tests | WB-004 不得标已证；历史“31 个测试”不可用 | 在云端从事实源补齐可审查测试并执行，证据绑定 commit/CI run | 经授权的实现阶段 |
-| GitHub Free 私有仓库的 branch protection 与 ruleset API 均返回 403，并明确要求 GitHub Pro 或公开仓库；公开违反产品边界 | WB-102 缺失且存在外部套餐阻断；流程约定不能冒充平台强制保护 | 保持 Private；升级到支持私有仓库保护的套餐后回读规则，并做安全负向验证 | 仓库治理/外部阻断 |
+| main 已配置并回读基础保护规则，但当前没有 CI workflow，`required_status_checks=null`，且尚未执行真实 direct push/绕过负测，也未完成保护规则与 Workbench repo-scoped 身份的组合验收 | WB-102 从缺失升级为不完整；基础保护已存在，但不能宣称“只能经通过检查的 PR 更新”已完整验收 | 建立最低 CI workflow 并将 required checks 绑定到 main；使用安全测试身份验证 direct push 与绕过被拒绝；归档规则、身份和负向记录 | 仓库治理/云 CI |
 | 只有 ChatGPT Work cloud task 的分支/PR 直接记录；当前官方页面无法回读，尚无官方环境证据 | WB-103 只能标不完整；WB-104/105 仍缺失 | 环境配置的官方可回读证据、最小 CI run、协作规则评审 | 云开发基础设施 |
 | Sites 项目与访问策略原始输出/链接尚未归档；未登录拒绝和服务端业务授权未验收 | WB-201 已证，但 WB-203 只能标不完整 | 归档控制面输出；另做浏览器授权身份成功、未登录/退出身份拒绝和服务端业务授权的直接验收 | Gate 0 |
 | D1 已回读但 R2 绑定与对象数因当前工具不支持而无法验证 | WB-202 只能标不完整，Artifact/R2 相关需求不能据此推进 | 通过可审计调用面回读 R2 binding、对象数和策略，不创建/删除对象 | Gate 0 |
@@ -47,7 +48,7 @@
 - 不用 D1 表已存在、R2 bucket 已存在或 Sites 历史版本替代业务验收。
 - 不用 15 张业务表为空或 24h Worker events 为 0 推断机器路由或 Gate 0 已完成；production deployment 成功只证明该精确部署状态，不证明应用回滚、完整发布追溯、身份/health、观察窗口或 Gate 0 已完成。
 - 当前机器身份仍被 custom-private 边缘 403 阻断，不得为了补证向正式 D1 写探针。
-- 不用人工流程约定冒充 GitHub 强制保护；也不得为解除套餐阻断把仓库改为公开。
+- 不用已配置的部分 GitHub 保护冒充完整验收；required CI checks、direct push/绕过负测及保护规则与身份组合验收缺一不可。
 - 不把本设计 PR、Proposal 草稿或 AI 结论记为实现证据。
 - 不因“没有观察到错误”推断功能正确；必须有正向与必要的负向 AC。
 

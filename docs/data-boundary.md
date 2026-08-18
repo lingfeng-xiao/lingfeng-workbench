@@ -17,7 +17,8 @@
 
 - D1 是 control 数据的唯一事实源；不得以 Node SQLite、浏览器缓存、消息记录或 Kanban 作为第二事实源。
 - R2 不是业务数据库，只承载 cloud-safe 封闭 allowlist 内的不可变或版本化产物；D1 保存其分类、摘要、哈希、版本和追溯引用。
-- GitHub 私有仓库是源码事实源。Node 签名发布包只走“云 CI→正式 GitHub Release→Hermes→Node”链路，R2 不承担 Node 包存储、镜像或分发角色。
+- GitHub 公开仓库是 Workbench 源码事实源，只允许 Workbench 源码、适合公开的安全设计/文档和经用户 Gate 明确发布的资产进入仓库或其历史。secret、local-only、公司代码及 diff、原始日志/SQL/数据库导出、客户或生产数据、完整业务测试或构建报告、Runtime 原始事件与对话、办公电脑绝对路径及任何未分类数据均不得进入仓库或历史。
+- GitHub 公开边界与 R2 cloud-safe 封闭 allowlist 是两个独立边界：内容适合进入公开源码仓库，不等于允许进入 R2；内容命中 R2 allowlist，也不自动授权提交到 GitHub。Node 签名发布包只走“云 CI→正式 GitHub Release→Hermes→Node”链路，R2 不承担 Node 包存储、镜像或分发角色。
 - Sites 版本与 Node Release 分别追溯到 commit、云 CI run 和用户 Release Gate，不互相充当事实源。
 - 所有产品读写只走版本化业务 API。页面、Hermes 和 Node 都不得绕过业务规则直接访问底层表或对象。
 - Node 只与 Hermes 建立机器通道。Hermes 代表 Node 调用 Sites 业务 API；Node 不直连 Sites、D1 或 R2。
