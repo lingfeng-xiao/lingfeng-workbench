@@ -40,7 +40,7 @@
 
 - WorkItem 可指定目标 Node，但不会携带另一台电脑的工作区、会话或任务执行上下文。
 - 同一 WorkItem 不得换电脑新建 Run 继续。跨电脑继续必须新建独立 WorkItem；上下文、Mission、Run、会话、文件和本地引用均不迁移、不同步。
-- 云端 `local_workspace_ref` 只能是绑定唯一 Node 的 Node-scoped 不透明引用 ID，不得包含或推导真实路径，也不得被其他 Node 解析。
+- 云端 `local_workspace_ref` 只允许保存绑定唯一 Node 的 Node-scoped 不透明引用 ID，不得包含或推导真实路径，也不得被其他 Node 解析；办公电脑绝对路径只留在对应 Node 本地，不能进入 D1、R2、日志或报告。
 - 办公电脑绝对路径只能留在对应 Node 本地，禁止进入 D1、R2、云端日志、构建/测试报告或其他云端产物。
 - Node 离线时，云端仅显示最后确认的 control 状态；不得猜测本地执行结果。
 
