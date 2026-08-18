@@ -9,15 +9,16 @@
 | 类别 | 业务含义 | 允许位置 | 典型内容 | 禁止事项 |
 |---|---|---|---|---|
 | control | 驱动和追踪工作的最小业务事实 | D1；经业务 API 读写 | WorkItem、运行状态、审批状态、幂等键摘要、节点在线摘要、发布追溯引用 | 正文、源码、日志、凭证混入控制摘要 |
-| cloud-safe | 已明确可进入云端的产物 | R2；D1 只存索引与分类声明 | 用户确认可上传的报告、签名 Node 包、公开级构建清单 | 未声明文件、办公数据目录、原始会话直接上传 |
-| local-only | 只属于某一电脑/工作区的上下文 | 对应 Node 本地 | 工作区文件、完整日志、会话上下文、运行目录、本地数据库、未声明附件 | 进入 D1/R2；跨电脑同步；随任务迁移 |
+| cloud-safe | 符合封闭 allowlist、可进入 R2 的 Workbench 自身产物 | R2；D1 只存索引与分类声明 | 仅限 Workbench 自身设计文档、Workbench 自身测试报告、Workbench 页面截图、合成 Fixture、用户明确确认安全的导出文件 | allowlist 外内容、未取得用户明确确认的导出、Node 发布包进入 R2 |
+| local-only | 只属于某一电脑/工作区的上下文 | 对应 Node 本地 | 工作区文件、公司完整报告、公司完整日志、公司完整代码、Runtime 原始对话、会话上下文、运行目录、本地数据库、未声明附件 | 进入 D1/R2；跨电脑同步；随任务迁移或换电脑续跑 |
 | secret | 可授予能力或泄露身份的敏感值 | 专用秘密存储或进程短时内存 | token、私钥、Sites/D1/R2 凭证、签名私钥 | 写入仓库、D1、R2 产物、日志、审批摘要；下发给办公 Node 的 Sites/D1/R2 凭证 |
 
 ## 3. 事实源与访问路径
 
 - D1 是 control 数据的唯一事实源；不得以 Node SQLite、浏览器缓存、消息记录或 Kanban 作为第二事实源。
-- R2 不是业务数据库，只承载显式 cloud-safe 的不可变或版本化产物；D1 保存其分类、摘要、哈希、版本和追溯引用。
-- GitHub 私有仓库是源码事实源；R2 发布包和 Sites 版本必须能追溯到 commit、云 CI run 和用户 Release Gate。
+- R2 不是业务数据库，只承载 cloud-safe 封闭 allowlist 内的不可变或版本化产物；D1 保存其分类、摘要、哈希、版本和追溯引用。
+- GitHub 私有仓库是源码事实源。Node 签名发布包只走“云 CI→正式 GitHub Release→Hermes→Node”链路，R2 不承担 Node 包存储、镜像或分发角色。
+- Sites 版本与 Node Release 分别追溯到 commit、云 CI run 和用户 Release Gate，不互相充当事实源。
 - 所有产品读写只走版本化业务 API。页面、Hermes 和 Node 都不得绕过业务规则直接访问底层表或对象。
 - Node 只与 Hermes 建立机器通道。Hermes 代表 Node 调用 Sites 业务 API；Node 不直连 Sites、D1 或 R2。
 
@@ -29,23 +30,24 @@
 | AgentRuntime | control | 类型、能力声明、健康摘要、所属 Node、版本 | runtime session 细节和本地进程材料 |
 | Run / Interaction | control | 状态、时间、检查点、短摘要、明确选项 | 完整输入输出、原始日志、会话上下文 |
 | Artifact 元数据 | control | 分类、所有者、哈希、大小、R2 key、来源 commit/run | local-only 文件只记本地引用，不生成云 key |
-| Artifact 内容 | cloud-safe 或 local-only | 仅 cloud-safe 内容进入 R2 | local-only 永远留在产生它的 Node |
+| Artifact 内容 | cloud-safe 或 local-only | 仅封闭 allowlist 内的 cloud-safe 内容进入 R2；Node 发布包不属于 R2 Artifact | 公司完整报告、公司完整日志、公司完整代码、Runtime 原始对话及其他 local-only 永远留在产生它的 Node |
 | Outbox | local-only + 最小 control 回执 | D1 仅保存已接收消息 ID、状态结果 | 待发消息、重试计数、顺序与本地证据引用 |
 | 发布追溯 | control | commit、CI run、包哈希、签名验证结果、Gate、回滚版本 | Node 保存当前/上一版本及验证记录 |
+| Node 签名发布包 | Release 资产（非 R2 Artifact） | 正式 GitHub Release；Hermes 只做经 Gate 的原样镜像/转交 | Node 仅保留 current/previous 已验证版本 |
 | 凭证/私钥 | secret | 不进入业务表或产物；只允许受控秘密存储 | Node 不持有 Sites/D1/R2 凭证；签名私钥不下发 |
 
 ## 5. 电脑隔离
 
 - WorkItem 可指定目标 Node，但不会携带另一台电脑的工作区、会话或任务执行上下文。
-- 同一 WorkItem 如需在另一台电脑继续，必须创建新的独立运行并重新声明输入边界；这不是迁移或同步。
+- 同一 WorkItem 不得换电脑新建 Run 继续。跨电脑继续必须新建独立 WorkItem；上下文、Mission、Run、会话、文件和本地引用均不迁移、不同步。
 - `local_workspace_ref` 只是目标 Node 可理解的本地引用，不是云端路径，也不得被其他 Node 解析。
 - Node 离线时，云端仅显示最后确认的 control 状态；不得猜测本地执行结果。
 
 ## 6. 上传和下载 Gate
 
-cloud-safe 上传必须同时具备：分类声明、来源、哈希、大小、所有者/关联对象、允许上传的用户或规则 Gate。任何一项缺失即拒绝。
+cloud-safe 上传必须先命中封闭 allowlist，并同时具备：分类声明、来源、哈希、大小、所有者/关联对象、允许上传的用户或规则 Gate。用户明确确认安全的导出文件还必须绑定该精确文件与确认记录。任何一项缺失即拒绝；自动摘要或自动脱敏不能把 local-only 转成 cloud-safe。
 
-Node 发布包下载必须经 Hermes，且在公司电脑安装前完成来源、版本、哈希和签名校验。签名算法留待实现设计选择，本基线只规定可验证结果与追溯字段。
+Node 发布包必须从正式 GitHub Release 由 Hermes 原样镜像/转交，且在公司电脑安装前完成来源、版本、manifest、哈希和签名校验。不得上传 R2 后另建分发链。签名算法留待实现设计选择，本基线只规定可验证结果与追溯字段。
 
 ## 7. 删除与回滚边界
 
@@ -53,4 +55,3 @@ Node 发布包下载必须经 Hermes，且在公司电脑安装前完成来源�
 - 删除 R2 对象前必须先确认没有有效发布或业务引用，并保留可审计的 control 事件。
 - 应用回滚不回滚或覆盖 Node 本地上下文；Node 回滚也不改变 D1 业务历史。
 - 备份恢复以 D1 逻辑一致性为目标；频率、工具和保留期不在本设计中预先指定。
-
