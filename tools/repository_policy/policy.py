@@ -11,6 +11,7 @@ from typing import Iterable, Sequence
 
 RECOVERY_COMMIT = "968b88d9f869b0ed7a42c91e67c911f2c1e5b36c"
 RECOVERY_TAG = "v0.1.0-server-recovered"
+RECOVERY_TAG_OBJECT = "f05298ff8f12f23b1625e82cc4a244c5e64728c1"
 RECOVERY_MANIFEST = "RECOVERY_MANIFEST.sha256"
 RECOVERY_NOTE = "SERVER_RECOVERY.md"
 EXPECTED_RECOVERY_FILES = 25
@@ -135,15 +136,30 @@ def parse_recovery_manifest(manifest_bytes: bytes) -> dict[str, str]:
     return entries
 
 
-def verify_recovery_provenance(repository: Path) -> list[Finding]:
+def verify_recovery_tag_identity(
+    tag_object_id: str,
+    resolved_commit_id: str,
+) -> list[Finding]:
     findings: list[Finding] = []
+    if tag_object_id != RECOVERY_TAG_OBJECT:
+        findings.append(Finding("recovery-tag-object-changed", RECOVERY_TAG))
+    if resolved_commit_id != RECOVERY_COMMIT:
+        findings.append(Finding("recovery-tag-moved", RECOVERY_TAG))
+    return findings
+
+
+def verify_recovery_provenance(repository: Path) -> list[Finding]:
+    tag_object_id = (
+        run_git(repository, "rev-parse", RECOVERY_TAG)
+        .decode("ascii")
+        .strip()
+    )
     resolved_tag = run_git(
         repository,
         "rev-parse",
         f"{RECOVERY_TAG}^{{commit}}",
     ).decode("ascii").strip()
-    if resolved_tag != RECOVERY_COMMIT:
-        findings.append(Finding("recovery-tag-moved", RECOVERY_TAG))
+    findings = verify_recovery_tag_identity(tag_object_id, resolved_tag)
 
     root_commit_parts = (
         run_git(repository, "rev-list", "--parents", "-n", "1", RECOVERY_COMMIT)

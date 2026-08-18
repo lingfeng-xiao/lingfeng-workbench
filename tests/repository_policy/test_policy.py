@@ -6,6 +6,8 @@ from unittest.mock import patch
 
 from tools.repository_policy.policy import (
     MAX_PUBLIC_BLOB_BYTES,
+    RECOVERY_COMMIT,
+    RECOVERY_TAG_OBJECT,
     PolicyExecutionError,
     Finding,
     format_finding,
@@ -14,10 +16,30 @@ from tools.repository_policy.policy import (
     sanitize_location,
     scan_bytes,
     scan_path_policy,
+    verify_recovery_tag_identity,
 )
 
 
 class RepositoryPolicyTests(unittest.TestCase):
+    def test_rejects_recreated_or_lightweight_recovery_tag(self) -> None:
+        self.assertEqual(
+            [],
+            verify_recovery_tag_identity(
+                RECOVERY_TAG_OBJECT,
+                RECOVERY_COMMIT,
+            ),
+        )
+
+        findings = verify_recovery_tag_identity(
+            RECOVERY_COMMIT,
+            RECOVERY_COMMIT,
+        )
+
+        self.assertEqual(
+            [Finding("recovery-tag-object-changed", "v0.1.0-server-recovered")],
+            findings,
+        )
+
     def test_accepts_hermes_server_recovery_path(self) -> None:
         findings = scan_bytes(
             "SERVER_RECOVERY.md",
