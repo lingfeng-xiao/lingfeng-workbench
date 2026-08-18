@@ -36,6 +36,27 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Prove cross-repository control-plane denial
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          status="$(
+            curl --silent --show-error --output /dev/null \
+              --write-out '%{http_code}' \
+              --header "Authorization: Bearer ${GH_TOKEN}" \
+              --header "Accept: application/vnd.github+json" \
+              https://api.github.com/repos/lingfeng-xiao/GoodMnze.github.io/actions/secrets/public-key
+          )"
+          case "${status}" in
+            403|404)
+              echo "cross-repository control-plane access denied"
+              ;;
+            *)
+              echo "cross-repository denial check failed with status ${status}" >&2
+              exit 1
+              ;;
+          esac
+
       - name: Run repository policy tests
         run: python -m unittest discover -s tests/repository_policy -p "test_*.py" -v
 
