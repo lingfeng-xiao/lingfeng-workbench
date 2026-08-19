@@ -205,7 +205,7 @@ test("checksum, cloud-safe reference and non-empty target are rejected before wr
 
   await assert.rejects(
     restoreLogicalExport(
-      target(corruptTarget, "corrupt01"),
+      await target(corruptTarget, "corrupt01"),
       { ...exported, generatedAt: "changed" },
       { migrations },
     ),
