@@ -6,6 +6,7 @@ from .api import (
     PAGES,
     TOP_LEVEL_SPACES,
     authorize_operation,
+    authorize_page,
     validate_api_contract,
 )
 from .auth import AuthenticatedPrincipal, PrincipalClaims
@@ -42,17 +43,24 @@ from .models import (
     contract_from_dict,
     record_hash,
 )
-from .rules import ArtifactCandidate, CrossSpaceReference
+from .rules import (
+    ArtifactCandidate,
+    ArtifactProvenance,
+    CrossSpaceReference,
+    IsolatedArtifactPolicyRegistry,
+)
 
 __all__ = [
     "API_VERSION", "OBJECT_API_ROUTES", "PAGES", "TOP_LEVEL_SPACES",
-    "ActorRole", "AgentRuntime", "ArtifactCandidate", "ArtifactReference",
+    "ActorRole", "AgentRuntime", "ArtifactCandidate", "ArtifactProvenance",
+    "ArtifactReference",
     "ArtifactSourceKind", "AuthenticatedPrincipal", "Capability",
     "CloudSafeKind", "ContractObject", "ControlEvent", "CrossSpaceReference",
     "DataClass", "Decision", "DecisionOutcome", "GateKind", "Interaction",
-    "InteractionState", "Mission", "Node", "ObjectType", "Observation",
+    "InteractionState", "IsolatedArtifactPolicyRegistry", "Mission", "Node",
+    "ObjectType", "Observation",
     "PrincipalClaims", "ProductArea", "Proposal", "ProposalState", "Release",
     "ReleaseState", "Run", "Space", "WorkItem", "WorkState",
-    "authorize_operation", "contract_from_dict", "record_hash",
+    "authorize_operation", "authorize_page", "contract_from_dict", "record_hash",
     "validate_api_contract",
 ]

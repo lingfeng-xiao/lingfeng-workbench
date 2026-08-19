@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import InitVar, asdict, dataclass
 from typing import Any, ClassVar
 
 from .enums import (
     ActorRole,
+    ArtifactSourceKind,
     CloudSafeKind,
     DataClass,
     DecisionOutcome,
@@ -31,6 +33,9 @@ from .validation import (
 )
 
 _PERSISTED = object()
+_LOCAL_ORIGIN = re.compile(
+    r"""(?ix)(?:file:/+|[a-z]:[\\/]|\\\\|(?:^|[\s("'=])/(?!/))"""
+)
 
 
 class ContractObject:
@@ -221,6 +226,10 @@ class ArtifactReference(ContractObject):
     cloud_safe_kind: CloudSafeKind | None = None
     user_confirmation_decision_id: str | None = None
     cross_space_reference_id: str | None = None
+    cross_space_work_item_id: str | None = None
+    source_kind: ArtifactSourceKind | None = None
+    source_locator: str | None = None
+    policy_evidence: str | None = None
 
     def __post_init__(self) -> None:
         _common(self)
@@ -228,6 +237,8 @@ class ArtifactReference(ContractObject):
         object.__setattr__(self, "owner_id", identifier(self.owner_id, "owner_id"))
         object.__setattr__(self, "data_class", DataClass(self.data_class))
         object.__setattr__(self, "origin", summary(self.origin, "origin"))
+        if _LOCAL_ORIGIN.search(self.origin):
+            raise PermissionError("Artifact origin must not contain a local absolute path")
         object.__setattr__(self, "sha256", sha256(self.sha256))
         if (
             not isinstance(self.size_bytes, int)
@@ -242,6 +253,17 @@ class ArtifactReference(ContractObject):
             )
         _optional_id(self, "user_confirmation_decision_id")
         _optional_id(self, "cross_space_reference_id")
+        _optional_id(self, "cross_space_work_item_id")
+        if self.source_kind is not None:
+            object.__setattr__(self, "source_kind", ArtifactSourceKind(self.source_kind))
+        if self.source_locator is not None:
+            object.__setattr__(
+                self, "source_locator", summary(self.source_locator, "source_locator")
+            )
+        if self.policy_evidence is not None:
+            object.__setattr__(
+                self, "policy_evidence", identifier(self.policy_evidence, "policy_evidence")
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -416,6 +438,7 @@ class Decision(ContractObject):
     decider_role: ActorRole
     outcome: DecisionOutcome
     replay_key: str
+    expires_at: str | None = None
 
     def __post_init__(self) -> None:
         _common(self)
@@ -433,6 +456,10 @@ class Decision(ContractObject):
         object.__setattr__(
             self, "replay_key", identifier(self.replay_key, "replay_key")
         )
+        if self.expires_at is not None:
+            object.__setattr__(
+                self, "expires_at", iso_timestamp(self.expires_at, "expires_at")
+            )
 
 
 OBJECT_CLASSES = {
@@ -445,21 +472,31 @@ OBJECT_CLASSES = {
 }
 
 
-def _contract_from_dict(payload: dict[str, Any], *, persisted: bool) -> ContractObject:
+def _contract_from_dict(
+    payload: dict[str, Any], *, _store_capability: object | None = None
+) -> ContractObject:
     values = dict(payload)
     object_type = ObjectType(values.pop("object_type"))
     declared_space = Space(values.pop("space"))
     cls = OBJECT_CLASSES[object_type]
     if declared_space != cls.space:
         raise ValueError("object space does not match its contract")
-    if persisted and cls in {Proposal, Release}:
+    if cls in {Proposal, Release} and _store_capability is _PERSISTED:
         values["_persisted"] = _PERSISTED
     return cls(**values)
 
 
 def contract_from_dict(payload: dict[str, Any]) -> ContractObject:
-    return _contract_from_dict(payload, persisted=False)
+    """Reconstruct only caller-creatable states; terminal Gate states remain forbidden."""
+
+    return _contract_from_dict(payload)
 
 
-def contract_from_persisted_dict(payload: dict[str, Any]) -> ContractObject:
-    return _contract_from_dict(payload, persisted=True)
+def _contract_from_store(
+    payload: dict[str, Any], *, _store_capability: object | None = None
+) -> ContractObject:
+    """Internal decoder; only storage owns the identity capability."""
+
+    if _store_capability is not _PERSISTED:
+        raise PermissionError("persisted reconstruction requires the store capability")
+    return _contract_from_dict(payload, _store_capability=_store_capability)

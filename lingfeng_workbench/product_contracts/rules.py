@@ -18,7 +18,7 @@ from .enums import (
     WorkState,
 )
 from .models import ContractObject
-from .validation import identifier, sha256, summary
+from .validation import identifier, iso_timestamp, positive_version, sha256, summary
 
 WORK_TRANSITIONS = {
     WorkState.DRAFT: {WorkState.READY, WorkState.CANCELLED},
@@ -54,6 +54,7 @@ RELEASE_TRANSITIONS = {
 GATE_TARGETS = {
     GateKind.PROPOSAL: ObjectType.PROPOSAL,
     GateKind.RELEASE: ObjectType.RELEASE,
+    GateKind.SENSITIVE_CHANGE: ObjectType.RELEASE,
     GateKind.ARTIFACT_EXPORT: ObjectType.ARTIFACT_REFERENCE,
 }
 EXPLICIT_CROSS_SPACE_PAIRS = frozenset(
@@ -98,7 +99,9 @@ def gate_for_transition(record: ContractObject, next_state: str) -> GateKind | N
         return GateKind.PROPOSAL
     if (
         record.object_type is ObjectType.RELEASE
-        and ReleaseState(next_state) is ReleaseState.RELEASED
+        and ReleaseState(next_state) in {
+            ReleaseState.RELEASED, ReleaseState.ROLLED_BACK,
+        }
     ):
         return GateKind.RELEASE
     return None
@@ -112,6 +115,14 @@ class CrossSpaceReference:
     target_type: ObjectType
     target_id: str
     control_event_id: str
+    source_version: int
+    source_hash: str
+    target_version: int
+    target_hash: str
+    control_event_version: int
+    control_event_hash: str
+    creator_id: str
+    created_at: str
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "id", identifier(self.id, "id"))
@@ -121,6 +132,27 @@ class CrossSpaceReference:
         object.__setattr__(self, "target_id", identifier(self.target_id, "target_id"))
         object.__setattr__(
             self, "control_event_id", identifier(self.control_event_id, "control_event_id")
+        )
+        object.__setattr__(
+            self, "source_version", positive_version(self.source_version)
+        )
+        object.__setattr__(self, "source_hash", sha256(self.source_hash))
+        object.__setattr__(
+            self, "target_version", positive_version(self.target_version)
+        )
+        object.__setattr__(self, "target_hash", sha256(self.target_hash))
+        object.__setattr__(
+            self, "control_event_version",
+            positive_version(self.control_event_version),
+        )
+        object.__setattr__(
+            self, "control_event_hash", sha256(self.control_event_hash)
+        )
+        object.__setattr__(
+            self, "creator_id", identifier(self.creator_id, "creator_id")
+        )
+        object.__setattr__(
+            self, "created_at", iso_timestamp(self.created_at, "created_at")
         )
         if (self.source_type, self.target_type) not in EXPLICIT_CROSS_SPACE_PAIRS:
             raise PermissionError("cross-space relationship is not allowed")
@@ -132,10 +164,33 @@ class ArtifactCandidate:
     artifact_sha256: str
     owner_type: ObjectType
     owner_id: str
-    source_kind: ArtifactSourceKind
-    source_locator: str
     storage_ref: str
     summary_label: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "artifact_id", identifier(self.artifact_id, "artifact_id")
+        )
+        object.__setattr__(self, "artifact_sha256", sha256(self.artifact_sha256))
+        object.__setattr__(self, "owner_type", ObjectType(self.owner_type))
+        object.__setattr__(self, "owner_id", identifier(self.owner_id, "owner_id"))
+        object.__setattr__(
+            self, "storage_ref", identifier(self.storage_ref, "storage_ref")
+        )
+        object.__setattr__(
+            self, "summary_label", summary(self.summary_label, "summary_label")
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactProvenance:
+    artifact_id: str
+    artifact_sha256: str
+    owner_type: ObjectType
+    owner_id: str
+    source_kind: ArtifactSourceKind
+    source_locator: str
+    policy_evidence: str
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -149,24 +204,63 @@ class ArtifactCandidate:
             self, "source_locator", summary(self.source_locator, "source_locator")
         )
         object.__setattr__(
-            self, "storage_ref", identifier(self.storage_ref, "storage_ref")
+            self, "policy_evidence", identifier(self.policy_evidence, "policy_evidence")
         )
-        object.__setattr__(
-            self, "summary_label", summary(self.summary_label, "summary_label")
+
+
+class IsolatedArtifactPolicyRegistry:
+    """Immutable synthetic server policy registry; never accepts request-time attestations."""
+
+    __slots__ = ("_entries",)
+
+    def __init__(
+        self, entries: tuple[ArtifactProvenance, ...], *, isolated: bool
+    ) -> None:
+        if not isolated:
+            raise RuntimeError("synthetic artifact policy registry is test-only")
+        mapped: dict[tuple[object, ...], ArtifactProvenance] = {}
+        for entry in entries:
+            key = (
+                entry.artifact_id, entry.artifact_sha256,
+                entry.owner_type, entry.owner_id,
+            )
+            if key in mapped:
+                raise ValueError("artifact provenance must be unique")
+            mapped[key] = entry
+        self._entries = mapped
+
+    def resolve(self, candidate: ArtifactCandidate) -> ArtifactProvenance:
+        key = (
+            candidate.artifact_id, candidate.artifact_sha256,
+            candidate.owner_type, candidate.owner_id,
         )
+        try:
+            return self._entries[key]
+        except KeyError as exc:
+            raise PermissionError(
+                "artifact lacks trusted server provenance"
+            ) from exc
 
 
 def classify_artifact_candidate(
     candidate: ArtifactCandidate,
+    provenance: ArtifactProvenance,
     principal: AuthenticatedPrincipal,
 ) -> CloudSafeKind:
-    """Server-owned classification; caller labels never change the decision."""
+    """Classify only immutable server provenance; caller labels are non-authoritative."""
 
     require_authenticated(principal)
-    if ABSOLUTE_PATH.match(candidate.source_locator):
+    if (
+        candidate.artifact_id != provenance.artifact_id
+        or candidate.artifact_sha256 != provenance.artifact_sha256
+        or candidate.owner_type is not provenance.owner_type
+        or candidate.owner_id != provenance.owner_id
+    ):
+        raise PermissionError("artifact provenance does not match the candidate")
+    if ABSOLUTE_PATH.match(provenance.source_locator):
         raise PermissionError("local path content cannot cross the boundary")
     try:
-        safe_kind = SAFE_SOURCE_MAP[candidate.source_kind]
+        safe_kind = SAFE_SOURCE_MAP[provenance.source_kind]
     except KeyError as exc:
         raise PermissionError("artifact source is not cloud-safe") from exc
     if safe_kind in {
@@ -178,3 +272,4 @@ def classify_artifact_candidate(
     if safe_kind is CloudSafeKind.USER_CONFIRMED_EXPORT and principal.role is not ActorRole.USER:
         raise PermissionError("only the user can request an export")
     return safe_kind
+

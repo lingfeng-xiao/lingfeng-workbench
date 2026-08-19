@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from typing import Any
+from dataclasses import replace
+from datetime import datetime, timedelta, timezone
+from typing import Any, Callable
 
 from .api import authorize_operation
 from .auth import AuthenticatedPrincipal, require_authenticated
@@ -14,9 +16,11 @@ from .enums import (
     DataClass,
     DecisionOutcome,
     GateKind,
+    InteractionState,
     ObjectType,
     ProposalState,
     ReleaseState,
+    WorkState,
 )
 from .models import (
     AgentRuntime,
@@ -31,11 +35,13 @@ from .models import (
     Release,
     Run,
     WorkItem,
-    contract_from_persisted_dict,
+    _PERSISTED,
+    _contract_from_store,
     record_hash,
 )
 from .rules import (
     ArtifactCandidate,
+    ArtifactProvenance,
     CrossSpaceReference,
     GATE_TARGETS,
     classify_artifact_candidate,
@@ -45,16 +51,68 @@ from .rules import (
 from .validation import identifier
 
 
+IMMUTABLE_RELATION_FIELDS = {
+    ObjectType.WORK_ITEM: ("target_node_id", "local_workspace_ref"),
+    ObjectType.MISSION: ("work_item_id",),
+    ObjectType.RUN: ("mission_id", "agent_runtime_id"),
+    ObjectType.INTERACTION: ("run_id",),
+    ObjectType.AGENT_RUNTIME: ("node_id",),
+    ObjectType.ARTIFACT_REFERENCE: (
+        "owner_type", "owner_id", "cross_space_reference_id",
+        "cross_space_work_item_id",
+    ),
+    ObjectType.CONTROL_EVENT: (
+        "subject_type", "subject_id", "sequence", "cross_space_reference_id",
+    ),
+    ObjectType.CAPABILITY: ("product_area_id",),
+    ObjectType.OBSERVATION: ("capability_id",),
+    ObjectType.PROPOSAL: ("capability_id", "source_observation_ids"),
+    ObjectType.RELEASE: ("proposal_id", "commit_sha", "saved_version"),
+}
+
+INITIAL_STATES = {
+    ObjectType.WORK_ITEM: WorkState.DRAFT,
+    ObjectType.MISSION: WorkState.DRAFT,
+    ObjectType.RUN: WorkState.READY,
+    ObjectType.INTERACTION: InteractionState.PENDING,
+    ObjectType.NODE: WorkState.ACTIVE,
+    ObjectType.AGENT_RUNTIME: WorkState.ACTIVE,
+    ObjectType.PRODUCT_AREA: WorkState.ACTIVE,
+    ObjectType.CAPABILITY: WorkState.DRAFT,
+    ObjectType.OBSERVATION: WorkState.DRAFT,
+    ObjectType.PROPOSAL: ProposalState.DRAFT,
+    ObjectType.RELEASE: ReleaseState.DRAFT,
+}
+
+
 class IsolatedSqliteContractStore:
     """Temporary test store. D1 remains the cloud control-plane fact source."""
 
-    def __init__(self, connection: sqlite3.Connection, *, isolated: bool) -> None:
+    def __init__(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        isolated: bool,
+        artifact_policy_registry: Any | None = None,
+        server_clock: Callable[[], datetime] | None = None,
+        decision_ttl_seconds: int = 300,
+    ) -> None:
         if not isolated:
             raise RuntimeError("SQLite contract store is restricted to isolated tests")
         database_path = connection.execute("PRAGMA database_list").fetchone()[2]
         if database_path:
             raise RuntimeError("SQLite contract store must use an in-memory database")
         self.connection = connection
+        self.artifact_policy_registry = artifact_policy_registry
+        self.server_clock = server_clock or (lambda: datetime.now(timezone.utc))
+        if (
+            not isinstance(decision_ttl_seconds, int)
+            or isinstance(decision_ttl_seconds, bool)
+            or decision_ttl_seconds < 1
+            or decision_ttl_seconds > 3600
+        ):
+            raise ValueError("decision TTL must be between 1 and 3600 seconds")
+        self.decision_ttl_seconds = decision_ttl_seconds
         self.connection.execute("PRAGMA foreign_keys = ON")
         if self.connection.execute("PRAGMA foreign_keys").fetchone()[0] != 1:
             raise RuntimeError("foreign-key enforcement is required")
@@ -76,7 +134,15 @@ class IsolatedSqliteContractStore:
                 source_id TEXT NOT NULL,
                 target_type TEXT NOT NULL,
                 target_id TEXT NOT NULL,
-                control_event_id TEXT NOT NULL
+                control_event_id TEXT NOT NULL,
+                source_version INTEGER NOT NULL,
+                source_hash TEXT NOT NULL,
+                target_version INTEGER NOT NULL,
+                target_hash TEXT NOT NULL,
+                control_event_version INTEGER NOT NULL,
+                control_event_hash TEXT NOT NULL,
+                creator_id TEXT NOT NULL,
+                created_at TEXT NOT NULL
             );
             CREATE TABLE gate_decisions (
                 decision_id TEXT PRIMARY KEY,
@@ -89,6 +155,8 @@ class IsolatedSqliteContractStore:
                 scope TEXT NOT NULL,
                 outcome TEXT NOT NULL,
                 decider_id TEXT NOT NULL,
+                issued_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
                 UNIQUE (gate, target_type, target_id, target_version, target_hash, scope)
             );
             CREATE TABLE gate_consumptions (
@@ -113,7 +181,12 @@ class IsolatedSqliteContractStore:
         require_authenticated(principal)
         if isinstance(record, Decision):
             raise PermissionError("Decisions must be recorded through the Gate ledger")
-        self._authorize_record(principal, record, write=True)
+        authorization_record = record
+        if principal.role is ActorRole.AGENT_RUNTIME:
+            latest = self._select_payload(record.object_type, record.id, None)
+            if latest is not None:
+                authorization_record = self._decode_row(latest)
+        self._authorize_record(principal, authorization_record, write=True)
         with self.connection:
             self._append_checked(record)
 
@@ -138,48 +211,68 @@ class IsolatedSqliteContractStore:
         row = self._select_payload(ObjectType(object_type), object_id, version)
         if row is None:
             raise KeyError("object was not found")
-        return contract_from_persisted_dict(json.loads(row[0]))
+        return self._decode_row(row)
 
     def add_cross_space_reference(
         self,
         reference: CrossSpaceReference,
         principal: AuthenticatedPrincipal,
-    ) -> None:
+    ) -> CrossSpaceReference:
         require_authenticated(principal)
         if principal.role is not ActorRole.USER:
             raise PermissionError("only the user may establish a cross-space relationship")
+        if reference.creator_id != principal.principal_id:
+            raise PermissionError("cross-space creator must be the authenticated user")
         source = self._get(reference.source_type, reference.source_id)
         target = self._get(reference.target_type, reference.target_id)
+        event = self._get(
+            ObjectType.CONTROL_EVENT,
+            reference.control_event_id,
+            reference.control_event_version,
+        )
         if source.space is target.space:
             raise ValueError("cross-space reference must cross exactly one space boundary")
-        event = self._get(ObjectType.CONTROL_EVENT, reference.control_event_id)
+        if (
+            source.version != reference.source_version
+            or record_hash(source) != reference.source_hash
+            or target.version != reference.target_version
+            or record_hash(target) != reference.target_hash
+            or record_hash(event) != reference.control_event_hash
+        ):
+            raise PermissionError("cross-space reference does not bind exact persisted endpoints")
         if not isinstance(event, ControlEvent) or (
             event.subject_type,
             event.subject_id,
         ) != (reference.source_type, reference.source_id):
             raise PermissionError("audit event does not match the reference source")
+        persisted = replace(reference, created_at=self._server_timestamp())
         with self.connection:
             self.connection.execute(
                 """
-                INSERT INTO cross_space_references
-                    (reference_id, source_type, source_id, target_type, target_id, control_event_id)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO cross_space_references (
+                    reference_id, source_type, source_id, target_type, target_id,
+                    control_event_id, source_version, source_hash,
+                    target_version, target_hash, control_event_version,
+                    control_event_hash, creator_id, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    reference.id,
-                    reference.source_type.value,
-                    reference.source_id,
-                    reference.target_type.value,
-                    reference.target_id,
-                    reference.control_event_id,
+                    persisted.id, persisted.source_type.value, persisted.source_id,
+                    persisted.target_type.value, persisted.target_id,
+                    persisted.control_event_id, persisted.source_version,
+                    persisted.source_hash, persisted.target_version,
+                    persisted.target_hash, persisted.control_event_version,
+                    persisted.control_event_hash, persisted.creator_id,
+                    persisted.created_at,
                 ),
             )
+        return persisted
 
     def record_decision(
         self,
         decision: Decision,
         principal: AuthenticatedPrincipal,
-    ) -> None:
+    ) -> Decision:
         require_authenticated(principal)
         if (
             principal.role is not ActorRole.USER
@@ -195,28 +288,39 @@ class IsolatedSqliteContractStore:
         ):
             raise PermissionError("Gate decision is stale or targets different content")
         expected_type = GATE_TARGETS.get(decision.gate)
-        if expected_type is not None and expected_type is not decision.target_type:
-            raise PermissionError("Gate targets the wrong object type")
-        payload = self._serialize(decision)
+        if expected_type is None or expected_type is not decision.target_type:
+            raise PermissionError("Gate has no exact target contract")
+        issued = self._server_now()
+        expires = issued + timedelta(seconds=self.decision_ttl_seconds)
+        persisted = replace(
+            decision,
+            created_at=self._format_timestamp(issued),
+            expires_at=self._format_timestamp(expires),
+        )
+        payload = self._serialize(persisted)
         try:
             with self.connection:
                 self.connection.execute(
                     """
                     INSERT INTO gate_decisions (
                         decision_id, replay_key, gate, target_type, target_id,
-                        target_version, target_hash, scope, outcome, decider_id
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        target_version, target_hash, scope, outcome, decider_id,
+                        issued_at, expires_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        decision.id, decision.replay_key, decision.gate.value,
-                        decision.target_type.value, decision.target_id,
-                        decision.target_version, decision.target_hash,
-                        decision.scope, decision.outcome.value, decision.decider_id,
+                        persisted.id, persisted.replay_key, persisted.gate.value,
+                        persisted.target_type.value, persisted.target_id,
+                        persisted.target_version, persisted.target_hash,
+                        persisted.scope, persisted.outcome.value,
+                        persisted.decider_id, persisted.created_at,
+                        persisted.expires_at,
                     ),
                 )
-                self._insert_object(decision, payload)
+                self._insert_object(persisted, payload)
         except sqlite3.IntegrityError as exc:
             raise PermissionError("Gate decision replay or duplicate authorization") from exc
+        return persisted
 
     def transition_state(
         self,
@@ -257,7 +361,7 @@ class IsolatedSqliteContractStore:
             payload = current.to_dict()
             payload["version"] = current.version + 1
             payload["state"] = str(next_state)
-            updated = contract_from_persisted_dict(payload)
+            updated = self._reconstruct(payload)
             self._validate_relationships(updated)
             self._insert_object(updated, self._serialize(updated))
             return updated
@@ -282,12 +386,15 @@ class IsolatedSqliteContractStore:
                 != (candidate.owner_type, candidate.owner_id)
             ):
                 raise PermissionError("artifact candidate does not match persisted metadata")
-            safe_kind = classify_artifact_candidate(candidate, principal)
+            if self.artifact_policy_registry is None:
+                raise PermissionError("trusted artifact policy registry is required")
+            provenance = self.artifact_policy_registry.resolve(candidate)
+            safe_kind = classify_artifact_candidate(candidate, provenance, principal)
             confirmation_id = None
             if safe_kind is CloudSafeKind.USER_CONFIRMED_EXPORT:
                 if decision_id is None:
                     raise PermissionError("export requires an exact user decision")
-                scope = artifact_export_scope(candidate, current.version)
+                scope = artifact_export_scope(candidate, provenance, current.version)
                 self._consume_decision(
                     decision_id=decision_id,
                     action_id=f"artifact-export-{current.id}-{current.version + 1}",
@@ -308,9 +415,12 @@ class IsolatedSqliteContractStore:
                     "cloud_safe_kind": safe_kind.value,
                     "storage_ref": candidate.storage_ref,
                     "user_confirmation_decision_id": confirmation_id,
+                    "source_kind": provenance.source_kind.value,
+                    "source_locator": provenance.source_locator,
+                    "policy_evidence": provenance.policy_evidence,
                 }
             )
-            updated = contract_from_persisted_dict(payload)
+            updated = self._reconstruct(payload)
             self._validate_relationships(updated)
             self._insert_object(updated, self._serialize(updated))
             return updated
@@ -323,18 +433,25 @@ class IsolatedSqliteContractStore:
                 record.data_class is DataClass.CLOUD_SAFE
                 or record.storage_ref is not None
                 or record.cloud_safe_kind is not None
+                or record.source_kind is not None
+                or record.source_locator is not None
+                or record.policy_evidence is not None
             ):
                 raise PermissionError("cloud-safe classification must come from server policy")
         latest_row = self._select_payload(record.object_type, record.id, None)
         if latest_row is None:
             if record.version != 1:
                 raise ValueError("first object version must be one")
+            expected_initial = INITIAL_STATES.get(record.object_type)
+            if expected_initial is not None and getattr(record, "state", None) is not expected_initial:
+                raise PermissionError("first object version must use the allowed initial state")
         else:
-            previous = contract_from_persisted_dict(json.loads(latest_row[0]))
+            previous = self._decode_row(latest_row)
             if record.version != previous.version + 1:
                 raise ValueError("object versions must be continuous")
             if record.created_at != previous.created_at:
                 raise ValueError("created_at is immutable")
+            self._validate_immutable_relationships(previous, record)
             old_state = getattr(previous, "state", None)
             new_state = getattr(record, "state", None)
             if new_state != old_state:
@@ -343,6 +460,16 @@ class IsolatedSqliteContractStore:
                     raise PermissionError("gated state must use atomic Gate transition")
         self._validate_relationships(record)
         self._insert_object(record, self._serialize(record))
+
+    @staticmethod
+    def _validate_immutable_relationships(
+        previous: ContractObject, record: ContractObject
+    ) -> None:
+        if previous.object_type is not record.object_type:
+            raise PermissionError("object type is immutable")
+        for field in IMMUTABLE_RELATION_FIELDS.get(record.object_type, ()):
+            if getattr(previous, field) != getattr(record, field):
+                raise PermissionError(f"{field} ownership or relationship is immutable")
 
     def _insert_object(self, record: ContractObject, payload: str) -> None:
         try:
@@ -360,6 +487,28 @@ class IsolatedSqliteContractStore:
         except sqlite3.IntegrityError as exc:
             raise ValueError("append-only object constraint failed") from exc
 
+    def consume_sensitive_change(
+        self,
+        release_id: str,
+        decision_id: str,
+        scope: str,
+        principal: AuthenticatedPrincipal,
+    ) -> None:
+        require_authenticated(principal)
+        if principal.role is not ActorRole.USER:
+            raise PermissionError("G3 requires the authenticated user")
+        with self.connection:
+            release = self._get(ObjectType.RELEASE, release_id)
+            self._consume_decision(
+                decision_id=decision_id,
+                action_id=f"sensitive-change-{release.id}-{release.version}",
+                gate=GateKind.SENSITIVE_CHANGE,
+                target=release,
+                scope=scope,
+                outcome=DecisionOutcome.ACCEPT,
+                principal=principal,
+            )
+
     def _consume_decision(
         self,
         *,
@@ -375,7 +524,7 @@ class IsolatedSqliteContractStore:
         row = self.connection.execute(
             """
             SELECT gate, target_type, target_id, target_version, target_hash,
-                   scope, outcome, decider_id
+                   scope, outcome, decider_id, issued_at, expires_at
             FROM gate_decisions WHERE decision_id = ?
             """,
             (decision_id,),
@@ -385,8 +534,18 @@ class IsolatedSqliteContractStore:
             gate.value, target.object_type.value, target.id, target.version,
             current_hash, scope, outcome.value, principal.principal_id,
         )
-        if row is None or tuple(row) != expected:
+        if row is None or tuple(row[:8]) != expected:
             raise PermissionError("Gate decision does not authorize this exact action")
+        issued = self._parse_timestamp(row[8])
+        expires = self._parse_timestamp(row[9])
+        now = self._server_now()
+        if (
+            issued > now
+            or expires <= issued
+            or expires - issued > timedelta(seconds=self.decision_ttl_seconds)
+            or now >= expires
+        ):
+            raise PermissionError("Gate decision is future-dated, expired, or over-age")
         try:
             self.connection.execute(
                 """
@@ -401,6 +560,7 @@ class IsolatedSqliteContractStore:
 
     def _validate_relationships(self, record: ContractObject) -> None:
         relations: list[tuple[ObjectType, str]] = []
+        cross_space_reference_used = False
         if isinstance(record, WorkItem):
             relations.append((ObjectType.NODE, record.target_node_id))
         elif isinstance(record, AgentRuntime):
@@ -408,6 +568,13 @@ class IsolatedSqliteContractStore:
         elif isinstance(record, Mission):
             relations.append((ObjectType.WORK_ITEM, record.work_item_id))
         elif isinstance(record, Run):
+            mission = self._get(ObjectType.MISSION, record.mission_id)
+            work_item = self._get(ObjectType.WORK_ITEM, mission.work_item_id)
+            runtime = self._get(ObjectType.AGENT_RUNTIME, record.agent_runtime_id)
+            if work_item.target_node_id != runtime.node_id:
+                raise PermissionError(
+                    "Run runtime node must match the Mission WorkItem target node"
+                )
             relations.extend(
                 [
                     (ObjectType.MISSION, record.mission_id),
@@ -438,6 +605,18 @@ class IsolatedSqliteContractStore:
                 raise ValueError("relationship type mismatch")
             if related.space is not record.space:
                 self._require_cross_space(record, related)
+                cross_space_reference_used = True
+        reference_id = getattr(record, "cross_space_reference_id", None)
+        if reference_id is not None and not cross_space_reference_used:
+            raise PermissionError(
+                "cross-space reference cannot be attached to a same-space relationship"
+            )
+        if (
+            isinstance(record, ArtifactReference)
+            and record.cross_space_work_item_id is not None
+            and not cross_space_reference_used
+        ):
+            raise PermissionError("cross-space WorkItem requires a cross-space owner")
         if isinstance(record, ControlEvent):
             row = self.connection.execute(
                 """
@@ -461,29 +640,59 @@ class IsolatedSqliteContractStore:
             raise PermissionError("cross-space relationship requires a persisted reference")
         row = self.connection.execute(
             """
-            SELECT source_type, source_id, target_type, target_id
+            SELECT source_type, source_id, source_version, source_hash,
+                   target_type, target_id, target_version, target_hash,
+                   control_event_id, control_event_version, control_event_hash,
+                   creator_id, created_at
             FROM cross_space_references WHERE reference_id = ?
             """,
             (reference_id,),
         ).fetchone()
         if row is None:
             raise PermissionError("cross-space reference does not exist")
-        pair = (
-            (ObjectType(row[0]), row[1]),
-            (ObjectType(row[2]), row[3]),
+        pair = {
+            (ObjectType(row[0]), row[1], row[2], row[3]),
+            (ObjectType(row[4]), row[5], row[6], row[7]),
+        }
+        related_key = (
+            related.object_type, related.id, related.version, record_hash(related),
         )
-        related_key = (related.object_type, related.id)
         if related_key not in pair:
-            raise PermissionError("cross-space reference does not match the relationship")
+            raise PermissionError("cross-space reference does not match the exact relationship")
+        audit_event = self._get(
+            ObjectType.CONTROL_EVENT, row[8], row[9]
+        )
+        if record_hash(audit_event) != row[10]:
+            raise PermissionError("cross-space audit event hash does not match")
         if isinstance(record, ArtifactReference):
-            owner_key = (record.owner_type, record.owner_id)
-            if owner_key not in pair:
-                raise PermissionError("artifact owner does not match the reference")
+            if record.cross_space_work_item_id is None:
+                raise PermissionError(
+                    "cross-space Artifact requires its actual WorkItem endpoint"
+                )
+            work_item = self._get(
+                ObjectType.WORK_ITEM, record.cross_space_work_item_id
+            )
+            owner = self._get(record.owner_type, record.owner_id)
+            expected_pair = {
+                (owner.object_type, owner.id, owner.version, record_hash(owner)),
+                (
+                    work_item.object_type, work_item.id,
+                    work_item.version, record_hash(work_item),
+                ),
+            }
+            if pair != expected_pair:
+                raise PermissionError(
+                    "artifact cross-space reference binds unrelated endpoints"
+                )
         if isinstance(record, ControlEvent):
-            if (ObjectType(row[2]), row[3]) != (
-                record.subject_type, record.subject_id,
-            ):
-                raise PermissionError("event subject does not match the reference target")
+            target_key = (
+                record.subject_type,
+                record.subject_id,
+                related.version,
+                record_hash(related),
+            )
+            if target_key not in pair:
+                raise PermissionError("event subject does not match the exact reference target")
 
     def _authorize_record(
         self,
@@ -517,6 +726,37 @@ class IsolatedSqliteContractStore:
             raise PermissionError("runtime ownership requires a bound Run")
         raise PermissionError("object has no runtime ownership")
 
+    def _server_now(self) -> datetime:
+        value = self.server_clock()
+        if not isinstance(value, datetime) or value.tzinfo is None:
+            raise RuntimeError("server clock must return a timezone-aware datetime")
+        return value.astimezone(timezone.utc)
+
+    @staticmethod
+    def _format_timestamp(value: datetime) -> str:
+        return value.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace(
+            "+00:00", "Z"
+        )
+
+    @staticmethod
+    def _parse_timestamp(value: str) -> datetime:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(
+            timezone.utc
+        )
+
+    def _server_timestamp(self) -> str:
+        return self._format_timestamp(self._server_now())
+
+    @staticmethod
+    def _reconstruct(payload: dict[str, Any]) -> ContractObject:
+        return _contract_from_store(payload, _store_capability=_PERSISTED)
+
+    def _decode_row(self, row: tuple[str, str]) -> ContractObject:
+        record = self._reconstruct(json.loads(row[0]))
+        if record_hash(record) != row[1]:
+            raise RuntimeError("persisted record hash mismatch")
+        return record
+
     def _select_payload(
         self, object_type: ObjectType, object_id: str, version: int | None
     ) -> tuple[str, str] | None:
@@ -545,11 +785,17 @@ class IsolatedSqliteContractStore:
         )
 
 
-def artifact_export_scope(candidate: ArtifactCandidate, version: int) -> str:
+def artifact_export_scope(
+    candidate: ArtifactCandidate,
+    provenance: ArtifactProvenance,
+    version: int,
+) -> str:
     return (
         f"artifact:{candidate.artifact_id}@{version};"
         f"hash={candidate.artifact_sha256};"
         f"owner={candidate.owner_type.value}/{candidate.owner_id};"
         f"kind={CloudSafeKind.USER_CONFIRMED_EXPORT.value};"
+        f"source={provenance.source_kind.value}/{provenance.source_locator};"
+        f"policy={provenance.policy_evidence};"
         f"storage={candidate.storage_ref}"
     )
