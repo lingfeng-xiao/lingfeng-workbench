@@ -33,8 +33,7 @@ test("runtime maps only trusted Sites browser headers and owns request IDs", asy
   nonceTable(db);
   const request = new Request("https://workbench.example/gate0/browser/health", {
     headers: {
-      "x-openai-sites-auth-context": "browser",
-      "x-openai-sites-user-id": "owner-subject",
+      "oai-authenticated-user-id": "owner-subject",
       "x-request-id": "caller-controlled",
     },
   });
@@ -46,6 +45,19 @@ test("runtime maps only trusted Sites browser headers and owns request IDs", asy
   assert.equal(response.status, 200);
   assert.match(body.request_id, /^[0-9a-f-]{36}$/u);
   assert.notEqual(body.request_id, "caller-controlled");
+});
+
+test("legacy x-openai browser headers cannot create a browser principal", (t) => {
+  const db = new SqliteD1();
+  t.after(() => db.close());
+  nonceTable(db);
+  const request = new Request("https://workbench.example/gate0/browser/health", {
+    headers: {
+      "x-openai-sites-auth-context": "browser",
+      "x-openai-sites-user-id": "owner-subject",
+    },
+  });
+  assert.equal(createSitesRuntime(request, env(db)).browserPrincipal, null);
 });
 
 test("edge assertion cannot be injected through booleans or unrelated headers", async (t) => {

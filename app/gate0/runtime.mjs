@@ -59,10 +59,10 @@ export function createSitesRuntime(request, env) {
   }
 
   const authContext = request.headers.get("x-openai-sites-auth-context");
-  const browserSubject = request.headers.get("x-openai-sites-user-id");
+  const browserSubject = request.headers.get("oai-authenticated-user-id");
   const machineClientId = request.headers.get("x-openai-sites-machine-client-id");
 
-  const browserPrincipal = authContext === "browser" && browserSubject
+  const browserPrincipal = browserSubject
     ? Object.freeze({ kind: "sites-human", subject: browserSubject })
     : null;
   const edgePrincipal = authContext === "machine" && machineClientId
