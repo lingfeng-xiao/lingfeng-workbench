@@ -21,7 +21,10 @@ test("build emits a runnable Sites server artifact and logical binding manifest"
   assert.match(entry, /from "\.\/migration-runner\.mjs"/u);
   assert.match(entry, /from "\.\/logical-recovery\.mjs"/u);
   assert.match(entry, /async fetch\(request, env\)/u);
-  assert.deepEqual(JSON.parse(artifactHosting), JSON.parse(sourceHosting));
+  const hosting = JSON.parse(artifactHosting);
+  assert.deepEqual(hosting, JSON.parse(sourceHosting));
+  assert.equal(hosting.d1, "DB");
+  assert.equal(hosting.r2, "ARTIFACTS");
 
   const manifest = JSON.parse(bindings);
   assert.equal(manifest.logical_bindings.D1.name, "DB");
