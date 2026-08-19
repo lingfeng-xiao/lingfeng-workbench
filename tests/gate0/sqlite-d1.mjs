@@ -16,7 +16,7 @@ class Statement {
   }
 
   execute() {
-    return /^\\s*(select|pragma|with)\\b/iu.test(this.sql) ? this.all() : this.run();
+    return /^\s*(select|pragma|with)\b/iu.test(this.sql) ? this.all() : this.run();
   }
 
   all() {
