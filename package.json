@@ -1,0 +1,13 @@
+{
+  "name": "lingfeng-workbench-gate0",
+  "private": true,
+  "version": "0.2.0-gate0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "build": "node app/gate0/build.mjs",
+    "test": "node --test tests/gate0/*.test.mjs"
+  }
+}
