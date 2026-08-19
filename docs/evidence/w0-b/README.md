@@ -46,9 +46,12 @@ The persistent nonce table now has checksum-bound source SQL and is copied to
 provisioned temporary D1 databases and are consumed atomically with a one-time random token.
 
 Logical restore now verifies every exported field after insertion in the same D1 batch, so even a
-trigger that changes a value to another otherwise-valid value rolls the whole restore back. Request
-bodies are bounded before and during streaming, the HMAC canonical form has an independent fixed
-vector, and recovery rejects non-finite, fractional, and non-safe integers.
+trigger that changes a value to another otherwise-valid value rolls the whole restore back. The
+frozen restore target exposes no brand, database handle or database name: a module-private WeakMap
+binds its object identity to the temporary D1 target and burns that identity at the start of the
+first restore attempt, whether that attempt succeeds or fails. Cloned or augmented objects carry no
+restore authority. Request bodies are bounded before and during streaming, the HMAC canonical form
+has an independent fixed vector, and recovery rejects non-finite, fractional, and non-safe integers.
 
 Validation for this new exact head is pending until isolated GitHub Actions checks out that commit.
 No Sites version was saved or deployed, and no production D1/R2 operation was performed. Real

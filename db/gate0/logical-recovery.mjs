@@ -4,7 +4,7 @@ import {
 } from "./migration-runner.mjs";
 
 const encoder = new TextEncoder();
-const ISOLATED_TARGET = Symbol("isolated-restore-target");
+const isolatedRestoreTargets = new WeakMap();
 const CLOUD_SAFE_PREFIXES = Object.freeze([
   "workbench/design/",
   "workbench/test-report/",
@@ -201,11 +201,13 @@ export async function createIsolatedRestoreTarget(
   if (!/^gate0-temp-[a-z0-9-]{8,80}$/u.test(attestation?.database_name || "")) {
     throw new RecoveryError("isolated_target_required");
   }
-  return Object.freeze({
-    brand: ISOLATED_TARGET,
+  const target = Object.freeze({});
+  isolatedRestoreTargets.set(target, {
     db,
     databaseName: attestation.database_name,
+    used: false,
   });
+  return target;
 }
 
 export async function createLogicalExport(db, { migrations }) {
@@ -352,11 +354,14 @@ function postVerificationStatements(db, guard, authority, exported) {
 }
 
 export async function restoreLogicalExport(target, exported, { migrations }) {
-  if (target?.brand !== ISOLATED_TARGET) throw new RecoveryError("isolated_target_required");
+  const targetState = isolatedRestoreTargets.get(target);
+  if (!targetState || targetState.used) throw new RecoveryError("isolated_target_required");
+  targetState.used = true;
+  const { db, databaseName } = targetState;
 
   let authority;
   try {
-    authority = await readMigrationAuthority(target.db, migrations);
+    authority = await readMigrationAuthority(db, migrations);
   } catch (error) {
     if (error instanceof MigrationError) throw new RecoveryError("migration_authority_rejected");
     throw error;
@@ -367,7 +372,7 @@ export async function restoreLogicalExport(target, exported, { migrations }) {
   for (const contract of authority.tables) {
     let result;
     try {
-      result = await target.db.prepare(`SELECT COUNT(*) AS count FROM "${contract.name}"`).first();
+      result = await db.prepare(`SELECT COUNT(*) AS count FROM "${contract.name}"`).first();
     } catch {
       throw new RecoveryError("target_read_failed");
     }
@@ -376,7 +381,7 @@ export async function restoreLogicalExport(target, exported, { migrations }) {
 
   const guard = guardName();
   const statements = [
-    target.db.prepare(`CREATE TABLE "${guard}"(ok INTEGER NOT NULL CHECK(ok = 1))`),
+    db.prepare(`CREATE TABLE "${guard}"(ok INTEGER NOT NULL CHECK(ok = 1))`),
   ];
   for (const table of exported.tables) {
     for (const row of table.rows) {
@@ -384,23 +389,23 @@ export async function restoreLogicalExport(target, exported, { migrations }) {
       const columnSql = columns.map((column) => `"${column}"`).join(", ");
       const placeholders = columns.map(() => "?").join(", ");
       statements.push(
-        target.db.prepare(
+        db.prepare(
           `INSERT INTO "${table.name}" (${columnSql}) VALUES (${placeholders})`,
         ).bind(...columns.map((column) => row[column])),
       );
     }
   }
-  statements.push(...postVerificationStatements(target.db, guard, authority, exported));
-  statements.push(target.db.prepare(`DROP TABLE "${guard}"`));
+  statements.push(...postVerificationStatements(db, guard, authority, exported));
+  statements.push(db.prepare(`DROP TABLE "${guard}"`));
 
   try {
-    await target.db.batch(statements);
+    await db.batch(statements);
   } catch {
     throw new RecoveryError("restore_transaction_failed");
   }
 
   return Object.freeze({
-    databaseName: target.databaseName,
+    databaseName: databaseName,
     schemaVersion: exported.schemaVersion,
     checksum: exported.checksum,
     counts: Object.freeze(Object.fromEntries(

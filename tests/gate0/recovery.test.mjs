@@ -203,13 +203,18 @@ test("checksum, cloud-safe reference and non-empty target are rejected before wr
   populate(source);
   const exported = await createLogicalExport(source, { migrations });
 
+  const corruptRestoreTarget = await target(corruptTarget, "corrupt01");
   await assert.rejects(
     restoreLogicalExport(
-      await target(corruptTarget, "corrupt01"),
+      corruptRestoreTarget,
       { ...exported, generatedAt: "changed" },
       { migrations },
     ),
     (error) => error.code === "checksum_rejected",
+  );
+  await assert.rejects(
+    restoreLogicalExport(corruptRestoreTarget, exported, { migrations }),
+    (error) => error.code === "isolated_target_required",
   );
 
   const badReferenceTables = exported.tables.map((table) => (
@@ -353,6 +358,39 @@ test("production-like databases cannot forge or replay restore isolation", async
   );
 });
 
+test("opaque restore target cannot be cloned, rebound or reused", async (t) => {
+  const source = new SqliteD1();
+  const restored = new SqliteD1();
+  const swapped = new SqliteD1();
+  t.after(() => source.close());
+  t.after(() => restored.close());
+  t.after(() => swapped.close());
+  for (const db of [source, restored, swapped]) await setup(db);
+  populate(source);
+  const exported = await createLogicalExport(source, { migrations });
+  const isolatedTarget = await target(restored, "opaque001");
+
+  assert.equal(Object.isFrozen(isolatedTarget), true);
+  assert.deepEqual(Reflect.ownKeys(isolatedTarget), []);
+  await assert.rejects(
+    restoreLogicalExport({ ...isolatedTarget }, exported, { migrations }),
+    (error) => error.code === "isolated_target_required",
+  );
+  await assert.rejects(
+    restoreLogicalExport({ ...isolatedTarget, db: swapped }, exported, { migrations }),
+    (error) => error.code === "isolated_target_required",
+  );
+  assert.equal(Reflect.set(isolatedTarget, "db", swapped), false);
+
+  const result = await restoreLogicalExport(isolatedTarget, exported, { migrations });
+  assert.equal(result.databaseName, "gate0-temp-opaque001");
+  assert.equal(swapped.prepare("SELECT COUNT(*) AS count FROM fixture_parent").first().count, 0);
+  await assert.rejects(
+    restoreLogicalExport(isolatedTarget, exported, { migrations }),
+    (error) => error.code === "isolated_target_required",
+  );
+});
+
 test("restore rejects non-finite and unsafe numeric values before writes", async (t) => {
   const source = new SqliteD1();
   const restored = new SqliteD1();
@@ -362,15 +400,23 @@ test("restore rejects non-finite and unsafe numeric values before writes", async
   await setup(restored);
   populate(source);
   const exported = await createLogicalExport(source, { migrations });
-  const isolatedTarget = await target(restored, "numbers01");
 
-  for (const unsafe of [Number.NaN, Number.POSITIVE_INFINITY, 9_007_199_254_740_992, 1.5]) {
+  for (const [index, unsafe] of [
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    9_007_199_254_740_992,
+    1.5,
+  ].entries()) {
     const tables = exported.tables.map((table) => (
       table.name === "fixture_parent"
         ? { ...table, rows: [{ ...table.rows[0], label: unsafe }] }
         : table
     ));
     const candidate = await rechecksum({ ...exported, tables });
+    const isolatedTarget = await target(
+      restored,
+      `numbers${String(index).padStart(2, "0")}`,
+    );
     await assert.rejects(
       restoreLogicalExport(isolatedTarget, candidate, { migrations }),
       (error) => error.code === "unsafe_number_rejected",
