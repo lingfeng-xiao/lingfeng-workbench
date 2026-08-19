@@ -59,7 +59,9 @@ test("synthetic old version upgrades without losing relationships or state", asy
 
   await migrate(db, [baseline, upgrade]);
   const row = db.prepare("SELECT parent_id, value, state FROM fixture_child WHERE id = ?").bind("child-1").first();
-  assert.equal(row.parent_id, "parent-1");\n  assert.equal(row.value, "kept");\n  assert.equal(row.state, "queued");
+  assert.equal(row.parent_id, "parent-1");
+  assert.equal(row.value, "kept");
+  assert.equal(row.state, "queued");
   assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all().results, []);
 });
 
