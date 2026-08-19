@@ -22,6 +22,7 @@ last_verified: 2026-08-20
 - 当前电脑已安装冻结版本 Node JAR 与独立 Java 21 Runtime，并由 `Lingfeng Workbench Node v0.2` 启动任务运行；Service 已看到 `office-pc` 持续心跳。旧 Python Node 任务仅禁用，未删除。公司电脑没有承担 workbench 源码开发。
 - 现有 Lingfeng Workbench Private Site 已发布版本 4，仍为 owner、custom access、唯一允许用户、0 个外部访客，D1/R2 均为 `null`；服务端只读 credential 与 Service URL 已更新。匿名访问返回 401，现有 bypass 测试返回 403，因此已证明身份层 fail-closed，但尚未完成登录用户的页面级生产 E2E。
 - CI/CD v1 已建立仓库级 Java、Web、OpenAPI、Windows Wrapper Gate，以及只从不可变 `v*` 标签生成两个 JAR 和 SHA-256 的 GitHub Release 流程。CI/Release 不持有生产凭证，也不自动部署任何环境。
+- Draft PR #1/#7/#8/#9 已标注被当前设计取代并关闭；其头分支、重复文档分支和已合入的三模块开发分支均已按 exact SHA 登记后删除。远端只保留 `main`，冻结恢复点为 `v0.2.0-mvp1-rc1`。
 - 尚未通过真实 WS 终态、登录用户 Sites 页面和完整生产形态 smoke；因此不删除旧 Python、旧 D1 或其它受 Gate 保护的遗留资产。
 
 详细旧证据保存在 `doc/history/v0.1-rescue/` 与 Git 历史中。
