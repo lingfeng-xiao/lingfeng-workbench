@@ -1,10 +1,11 @@
 @echo off
 setlocal
 set "MAVEN_PROJECTBASEDIR=%~dp0"
+set "MAVEN_PROJECTBASEDIR=%MAVEN_PROJECTBASEDIR:~0,-1%"
 if not defined JAVA_HOME goto noJavaHome
 if not exist "%JAVA_HOME%\bin\java.exe" goto invalidJavaHome
 
-set "WRAPPER_DIR=%MAVEN_PROJECTBASEDIR%.mvn\wrapper"
+set "WRAPPER_DIR=%MAVEN_PROJECTBASEDIR%\.mvn\wrapper"
 set "WRAPPER_JAR=%WRAPPER_DIR%\maven-wrapper.jar"
 if exist "%WRAPPER_JAR%" goto runWrapper
 

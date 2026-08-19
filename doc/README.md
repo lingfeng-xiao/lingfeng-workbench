@@ -18,8 +18,9 @@ last_verified: 2026-08-19
 5. [current-state.md](current-state.md)：当前实现事实与迁移进度。
 6. [testing/e2e-1-fake.md](testing/e2e-1-fake.md)：当前组合联调证据与未覆盖 Gate。
 7. [testing/e2e-1-real-ws.md](testing/e2e-1-real-ws.md)：真实 WS 尝试、修复和当前阻塞。
-8. [releases/v0.2.0-mvp1-rc1.md](releases/v0.2.0-mvp1-rc1.md)：冻结候选范围和未满足 Gate。
-9. [asset-inventory.md](asset-inventory.md)：历史资产能否复用及其清理 Gate。
+8. [releases/README.md](releases/README.md)：版本、CI 和发布 Gate。
+9. [releases/v0.2.0-mvp1-rc1.md](releases/v0.2.0-mvp1-rc1.md)：冻结候选范围和未满足 Gate。
+10. [asset-inventory.md](asset-inventory.md)：历史资产能否复用及其清理 Gate。
 
 ## 权威规则
 
