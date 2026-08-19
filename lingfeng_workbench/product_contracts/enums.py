@@ -40,6 +40,27 @@ class CloudSafeKind(StrEnum):
     USER_CONFIRMED_EXPORT = "user_confirmed_export"
 
 
+class ArtifactSourceKind(StrEnum):
+    WORKBENCH_DESIGN = "workbench_design"
+    WORKBENCH_TEST_REPORT = "workbench_test_report"
+    WORKBENCH_SCREENSHOT = "workbench_screenshot"
+    SYNTHETIC_FIXTURE = "synthetic_fixture"
+    USER_EXPORT = "user_export"
+    COMPANY_CODE = "company_code"
+    SOURCE_DIFF = "source_diff"
+    RAW_LOG = "raw_log"
+    SQL = "sql"
+    DATABASE_EXPORT = "database_export"
+    CUSTOMER_DATA = "customer_data"
+    PRODUCTION_DATA = "production_data"
+    BUSINESS_TEST_REPORT = "business_test_report"
+    BUILD_REPORT = "build_report"
+    RUNTIME_CONVERSATION = "runtime_conversation"
+    ABSOLUTE_PATH = "absolute_path"
+    SECRET = "secret"
+    UNKNOWN = "unknown"
+
+
 class ActorRole(StrEnum):
     USER = "user"
     WORKBENCH = "workbench"
@@ -53,6 +74,7 @@ class GateKind(StrEnum):
     PR_MERGE = "g2_pr_merge"
     SENSITIVE_CHANGE = "g3_sensitive_change"
     RELEASE = "g4_release"
+    ARTIFACT_EXPORT = "artifact_export"
 
 
 class DecisionOutcome(StrEnum):

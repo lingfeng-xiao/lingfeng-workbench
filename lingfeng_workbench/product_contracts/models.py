@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
-from typing import Any, ClassVar, TypeVar
+import hashlib
+import json
+from dataclasses import InitVar, asdict, dataclass
+from typing import Any, ClassVar
 
 from .enums import (
     ActorRole,
@@ -28,6 +30,8 @@ from .validation import (
     summary,
 )
 
+_PERSISTED = object()
+
 
 class ContractObject:
     object_type: ClassVar[ObjectType]
@@ -38,6 +42,13 @@ class ContractObject:
         payload["object_type"] = self.object_type.value
         payload["space"] = self.space.value
         return payload
+
+
+def record_hash(record: ContractObject) -> str:
+    payload = json.dumps(
+        record.to_dict(), ensure_ascii=True, separators=(",", ":"), sort_keys=True
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _common(record: Any) -> None:
@@ -55,11 +66,16 @@ def _ids(values: tuple[str, ...] | list[str], field: str) -> tuple[str, ...]:
     return normalized
 
 
+def _optional_id(record: Any, field: str) -> None:
+    value = getattr(record, field)
+    if value is not None:
+        object.__setattr__(record, field, identifier(value, field))
+
+
 @dataclass(frozen=True, slots=True)
 class WorkItem(ContractObject):
     object_type: ClassVar[ObjectType] = ObjectType.WORK_ITEM
     space: ClassVar[Space] = Space.MY_WORK
-
     id: str
     version: int
     created_at: str
@@ -88,7 +104,6 @@ class WorkItem(ContractObject):
 class Mission(ContractObject):
     object_type: ClassVar[ObjectType] = ObjectType.MISSION
     space: ClassVar[Space] = Space.MY_WORK
-
     id: str
     version: int
     created_at: str
@@ -109,7 +124,6 @@ class Mission(ContractObject):
 class Run(ContractObject):
     object_type: ClassVar[ObjectType] = ObjectType.RUN
     space: ClassVar[Space] = Space.MY_WORK
-
     id: str
     version: int
     created_at: str
@@ -132,7 +146,6 @@ class Run(ContractObject):
 class Interaction(ContractObject):
     object_type: ClassVar[ObjectType] = ObjectType.INTERACTION
     space: ClassVar[Space] = Space.MY_WORK
-
     id: str
     version: int
     created_at: str
@@ -146,9 +159,7 @@ class Interaction(ContractObject):
         object.__setattr__(self, "run_id", identifier(self.run_id, "run_id"))
         object.__setattr__(self, "kind", identifier(self.kind, "kind"))
         object.__setattr__(
-            self,
-            "prompt_summary",
-            summary(self.prompt_summary, "prompt_summary"),
+            self, "prompt_summary", summary(self.prompt_summary, "prompt_summary")
         )
         object.__setattr__(self, "state", InteractionState(self.state))
 
@@ -157,7 +168,6 @@ class Interaction(ContractObject):
 class Node(ContractObject):
     object_type: ClassVar[ObjectType] = ObjectType.NODE
     space: ClassVar[Space] = Space.MY_WORK
-
     id: str
     version: int
     created_at: str
@@ -176,7 +186,6 @@ class Node(ContractObject):
 class AgentRuntime(ContractObject):
     object_type: ClassVar[ObjectType] = ObjectType.AGENT_RUNTIME
     space: ClassVar[Space] = Space.MY_WORK
-
     id: str
     version: int
     created_at: str
@@ -191,9 +200,7 @@ class AgentRuntime(ContractObject):
         object.__setattr__(
             self, "runtime_kind", identifier(self.runtime_kind, "runtime_kind")
         )
-        object.__setattr__(
-            self, "capabilities", _ids(self.capabilities, "capability")
-        )
+        object.__setattr__(self, "capabilities", _ids(self.capabilities, "capability"))
         object.__setattr__(self, "state", WorkState(self.state))
 
 
@@ -201,7 +208,6 @@ class AgentRuntime(ContractObject):
 class ArtifactReference(ContractObject):
     object_type: ClassVar[ObjectType] = ObjectType.ARTIFACT_REFERENCE
     space: ClassVar[Space] = Space.MY_WORK
-
     id: str
     version: int
     created_at: str
@@ -214,6 +220,7 @@ class ArtifactReference(ContractObject):
     storage_ref: str | None = None
     cloud_safe_kind: CloudSafeKind | None = None
     user_confirmation_decision_id: str | None = None
+    cross_space_reference_id: str | None = None
 
     def __post_init__(self) -> None:
         _common(self)
@@ -228,30 +235,19 @@ class ArtifactReference(ContractObject):
             or self.size_bytes < 0
         ):
             raise ValueError("size_bytes must be a non-negative integer")
-        if self.storage_ref is not None:
-            object.__setattr__(
-                self, "storage_ref", identifier(self.storage_ref, "storage_ref")
-            )
+        _optional_id(self, "storage_ref")
         if self.cloud_safe_kind is not None:
             object.__setattr__(
                 self, "cloud_safe_kind", CloudSafeKind(self.cloud_safe_kind)
             )
-        if self.user_confirmation_decision_id is not None:
-            object.__setattr__(
-                self,
-                "user_confirmation_decision_id",
-                identifier(
-                    self.user_confirmation_decision_id,
-                    "user_confirmation_decision_id",
-                ),
-            )
+        _optional_id(self, "user_confirmation_decision_id")
+        _optional_id(self, "cross_space_reference_id")
 
 
 @dataclass(frozen=True, slots=True)
 class ControlEvent(ContractObject):
     object_type: ClassVar[ObjectType] = ObjectType.CONTROL_EVENT
     space: ClassVar[Space] = Space.MY_WORK
-
     id: str
     version: int
     created_at: str
@@ -260,6 +256,7 @@ class ControlEvent(ContractObject):
     sequence: int
     event_type: str
     event_summary: str
+    cross_space_reference_id: str | None = None
 
     def __post_init__(self) -> None:
         _common(self)
@@ -279,13 +276,13 @@ class ControlEvent(ContractObject):
         object.__setattr__(
             self, "event_summary", summary(self.event_summary, "event_summary")
         )
+        _optional_id(self, "cross_space_reference_id")
 
 
 @dataclass(frozen=True, slots=True)
 class ProductArea(ContractObject):
     object_type: ClassVar[ObjectType] = ObjectType.PRODUCT_AREA
     space: ClassVar[Space] = Space.WORKBENCH
-
     id: str
     version: int
     created_at: str
@@ -302,7 +299,6 @@ class ProductArea(ContractObject):
 class Capability(ContractObject):
     object_type: ClassVar[ObjectType] = ObjectType.CAPABILITY
     space: ClassVar[Space] = Space.WORKBENCH
-
     id: str
     version: int
     created_at: str
@@ -313,9 +309,7 @@ class Capability(ContractObject):
     def __post_init__(self) -> None:
         _common(self)
         object.__setattr__(
-            self,
-            "product_area_id",
-            identifier(self.product_area_id, "product_area_id"),
+            self, "product_area_id", identifier(self.product_area_id, "product_area_id")
         )
         object.__setattr__(self, "title", summary(self.title, "title"))
         object.__setattr__(self, "state", WorkState(self.state))
@@ -325,7 +319,6 @@ class Capability(ContractObject):
 class Observation(ContractObject):
     object_type: ClassVar[ObjectType] = ObjectType.OBSERVATION
     space: ClassVar[Space] = Space.WORKBENCH
-
     id: str
     version: int
     created_at: str
@@ -350,7 +343,6 @@ class Observation(ContractObject):
 class Proposal(ContractObject):
     object_type: ClassVar[ObjectType] = ObjectType.PROPOSAL
     space: ClassVar[Space] = Space.WORKBENCH
-
     id: str
     version: int
     created_at: str
@@ -358,8 +350,9 @@ class Proposal(ContractObject):
     source_observation_ids: tuple[str, ...]
     proposal_summary: str
     state: ProposalState = ProposalState.DRAFT
+    _persisted: InitVar[object | None] = None
 
-    def __post_init__(self) -> None:
+    def __post_init__(self, _persisted: object | None) -> None:
         _common(self)
         object.__setattr__(
             self, "capability_id", identifier(self.capability_id, "capability_id")
@@ -370,18 +363,18 @@ class Proposal(ContractObject):
             _ids(self.source_observation_ids, "source_observation_id"),
         )
         object.__setattr__(
-            self,
-            "proposal_summary",
-            summary(self.proposal_summary, "proposal_summary"),
+            self, "proposal_summary", summary(self.proposal_summary, "proposal_summary")
         )
-        object.__setattr__(self, "state", ProposalState(self.state))
+        state = ProposalState(self.state)
+        if state in {ProposalState.ACCEPTED, ProposalState.REJECTED} and _persisted is not _PERSISTED:
+            raise PermissionError("resolved Proposal state must be created by the Gate store")
+        object.__setattr__(self, "state", state)
 
 
 @dataclass(frozen=True, slots=True)
 class Release(ContractObject):
     object_type: ClassVar[ObjectType] = ObjectType.RELEASE
     space: ClassVar[Space] = Space.WORKBENCH
-
     id: str
     version: int
     created_at: str
@@ -389,8 +382,9 @@ class Release(ContractObject):
     commit_sha: str
     saved_version: str
     state: ReleaseState = ReleaseState.DRAFT
+    _persisted: InitVar[object | None] = None
 
-    def __post_init__(self) -> None:
+    def __post_init__(self, _persisted: object | None) -> None:
         _common(self)
         object.__setattr__(
             self, "proposal_id", identifier(self.proposal_id, "proposal_id")
@@ -399,14 +393,16 @@ class Release(ContractObject):
         object.__setattr__(
             self, "saved_version", identifier(self.saved_version, "saved_version")
         )
-        object.__setattr__(self, "state", ReleaseState(self.state))
+        state = ReleaseState(self.state)
+        if state in {ReleaseState.RELEASED, ReleaseState.ROLLED_BACK} and _persisted is not _PERSISTED:
+            raise PermissionError("released state must be created by the Gate store")
+        object.__setattr__(self, "state", state)
 
 
 @dataclass(frozen=True, slots=True)
 class Decision(ContractObject):
     object_type: ClassVar[ObjectType] = ObjectType.DECISION
     space: ClassVar[Space] = Space.WORKBENCH
-
     id: str
     version: int
     created_at: str
@@ -414,6 +410,7 @@ class Decision(ContractObject):
     target_type: ObjectType
     target_id: str
     target_version: int
+    target_hash: str
     scope: str
     decider_id: str
     decider_role: ActorRole
@@ -424,12 +421,9 @@ class Decision(ContractObject):
         _common(self)
         object.__setattr__(self, "gate", GateKind(self.gate))
         object.__setattr__(self, "target_type", ObjectType(self.target_type))
-        object.__setattr__(
-            self, "target_id", identifier(self.target_id, "target_id")
-        )
-        object.__setattr__(
-            self, "target_version", positive_version(self.target_version)
-        )
+        object.__setattr__(self, "target_id", identifier(self.target_id, "target_id"))
+        object.__setattr__(self, "target_version", positive_version(self.target_version))
+        object.__setattr__(self, "target_hash", sha256(self.target_hash))
         object.__setattr__(self, "scope", summary(self.scope, "scope"))
         object.__setattr__(
             self, "decider_id", identifier(self.decider_id, "decider_id")
@@ -444,30 +438,28 @@ class Decision(ContractObject):
 OBJECT_CLASSES = {
     cls.object_type: cls
     for cls in (
-        WorkItem,
-        Mission,
-        Run,
-        Interaction,
-        Node,
-        AgentRuntime,
-        ArtifactReference,
-        ControlEvent,
-        ProductArea,
-        Capability,
-        Observation,
-        Proposal,
-        Release,
-        Decision,
+        WorkItem, Mission, Run, Interaction, Node, AgentRuntime,
+        ArtifactReference, ControlEvent, ProductArea, Capability,
+        Observation, Proposal, Release, Decision,
     )
 }
-T = TypeVar("T", bound=ContractObject)
 
 
-def contract_from_dict(payload: dict[str, Any]) -> ContractObject:
+def _contract_from_dict(payload: dict[str, Any], *, persisted: bool) -> ContractObject:
     values = dict(payload)
     object_type = ObjectType(values.pop("object_type"))
     declared_space = Space(values.pop("space"))
     cls = OBJECT_CLASSES[object_type]
-    if declared_space is not cls.space:
+    if declared_space != cls.space:
         raise ValueError("object space does not match its contract")
+    if persisted and cls in {Proposal, Release}:
+        values["_persisted"] = _PERSISTED
     return cls(**values)
+
+
+def contract_from_dict(payload: dict[str, Any]) -> ContractObject:
+    return _contract_from_dict(payload, persisted=False)
+
+
+def contract_from_persisted_dict(payload: dict[str, Any]) -> ContractObject:
+    return _contract_from_dict(payload, persisted=True)
