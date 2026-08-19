@@ -290,6 +290,16 @@ class IsolatedSqliteContractStore:
         expected_type = GATE_TARGETS.get(decision.gate)
         if expected_type is None or expected_type is not decision.target_type:
             raise PermissionError("Gate has no exact target contract")
+        latest_decision = self._select_payload(
+            ObjectType.DECISION, decision.id, None
+        )
+        if latest_decision is None:
+            if decision.version != 1:
+                raise ValueError("first object version must be one")
+        else:
+            previous_decision = self._decode_row(latest_decision)
+            if decision.version != previous_decision.version + 1:
+                raise ValueError("object versions must be continuous")
         issued = self._server_now()
         expires = issued + timedelta(seconds=self.decision_ttl_seconds)
         persisted = replace(
@@ -702,7 +712,7 @@ class IsolatedSqliteContractStore:
         write: bool,
     ) -> None:
         if principal.role is ActorRole.AGENT_RUNTIME:
-            node_id, runtime_id = self._ownership(record)
+            node_id, runtime_id = self._ownership(record, principal)
         else:
             node_id = runtime_id = None
         authorize_operation(
@@ -710,21 +720,59 @@ class IsolatedSqliteContractStore:
             target_node_id=node_id, target_runtime_id=runtime_id,
         )
 
-    def _ownership(self, record: ContractObject) -> tuple[str, str]:
+    def _ownership(
+        self,
+        record: ContractObject,
+        principal: AuthenticatedPrincipal,
+    ) -> tuple[str, str]:
         if isinstance(record, Run):
             runtime = self._get(ObjectType.AGENT_RUNTIME, record.agent_runtime_id)
             return runtime.node_id, runtime.id
         if isinstance(record, Interaction):
-            return self._ownership(self._get(ObjectType.RUN, record.run_id))
+            return self._ownership(
+                self._get(ObjectType.RUN, record.run_id), principal
+            )
         if isinstance(record, ArtifactReference):
-            return self._ownership(self._get(record.owner_type, record.owner_id))
+            return self._ownership(
+                self._get(record.owner_type, record.owner_id), principal
+            )
         if isinstance(record, ControlEvent):
-            return self._ownership(self._get(record.subject_type, record.subject_id))
-        if isinstance(record, WorkItem):
-            raise PermissionError("runtime ownership requires a bound Run")
-        if isinstance(record, Mission):
-            raise PermissionError("runtime ownership requires a bound Run")
+            return self._ownership(
+                self._get(record.subject_type, record.subject_id), principal
+            )
+        if isinstance(record, (WorkItem, Mission)):
+            return self._runtime_chain_ownership(record, principal)
         raise PermissionError("object has no runtime ownership")
+
+    def _runtime_chain_ownership(
+        self,
+        record: WorkItem | Mission,
+        principal: AuthenticatedPrincipal,
+    ) -> tuple[str, str]:
+        runtime = self._get(ObjectType.AGENT_RUNTIME, principal.runtime_id)
+        if runtime.node_id != principal.node_id:
+            raise PermissionError("runtime identity does not match persisted Node")
+        rows = self.connection.execute(
+            """
+            SELECT payload_json, record_hash
+            FROM contract_objects
+            WHERE object_type = ?
+              AND json_extract(payload_json, '$.agent_runtime_id') = ?
+            ORDER BY object_id, version DESC
+            """,
+            (ObjectType.RUN.value, runtime.id),
+        ).fetchall()
+        for row in rows:
+            run = self._decode_row(row)
+            mission = self._get(ObjectType.MISSION, run.mission_id)
+            work_item = self._get(ObjectType.WORK_ITEM, mission.work_item_id)
+            if work_item.target_node_id != runtime.node_id:
+                continue
+            if isinstance(record, Mission) and mission.id == record.id:
+                return runtime.node_id, runtime.id
+            if isinstance(record, WorkItem) and work_item.id == record.id:
+                return runtime.node_id, runtime.id
+        raise PermissionError("runtime ownership requires a persisted bound Run")
 
     def _server_now(self) -> datetime:
         value = self.server_clock()

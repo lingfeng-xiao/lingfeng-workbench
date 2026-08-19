@@ -14,6 +14,7 @@ from lingfeng_workbench.product_contracts import (
 from lingfeng_workbench.product_contracts.auth import (
     AuthenticatedPrincipal, IsolatedIdentityProvider,
 )
+from lingfeng_workbench.product_contracts.rules import classify_artifact_candidate
 from lingfeng_workbench.product_contracts.storage import (
     IsolatedSqliteContractStore, artifact_export_scope,
 )
@@ -299,6 +300,23 @@ class GateSecurityTests(SecureStoreCase):
             self.store.record_decision(wrong, self.user)
 
 
+    def test_first_decision_version_must_be_one(self):
+        proposal = self.prepare_proposal()
+        non_initial = replace(
+            self.make_decision(
+                proposal,
+                decision_id="decision-non-initial",
+                gate=GateKind.PROPOSAL,
+                scope="Exact proposal",
+            ),
+            version=7,
+        )
+        with self.assertRaisesRegex(
+            ValueError, "first object version must be one"
+        ):
+            self.store.record_decision(non_initial, self.user)
+
+
 class ArtifactSecurityTests(SecureStoreCase):
     def append_artifact(self, artifact_id, sha):
         item = ArtifactReference(
@@ -349,6 +367,27 @@ class ArtifactSecurityTests(SecureStoreCase):
                 self.candidate(path.id, path.sha256), self.user
             )
 
+    def test_source_locator_rejects_embedded_local_paths(self):
+        candidate = self.candidate("artifact-safe", "a" * 64)
+        for locator in (
+            "generated-from:C:\\office\\report.txt",
+            "generated-from:file:///C:/office/report.txt",
+            "generated-from:/Users/user/report.txt",
+            "generated-from:/home/user/report.txt",
+        ):
+            provenance = ArtifactProvenance(
+                candidate.artifact_id,
+                candidate.artifact_sha256,
+                candidate.owner_type,
+                candidate.owner_id,
+                ArtifactSourceKind.WORKBENCH_DESIGN,
+                locator,
+                "policy-embedded-path",
+            )
+            with self.subTest(locator=locator):
+                with self.assertRaises(PermissionError):
+                    classify_artifact_candidate(candidate, provenance, self.user)
+
     def test_plain_append_and_origin_cannot_claim_cloud_or_local_paths(self):
         with self.assertRaises(PermissionError):
             self.store.append(
@@ -362,7 +401,10 @@ class ArtifactSecurityTests(SecureStoreCase):
             )
         for origin in (
             "C:\\office\\report.txt",
+            "generated-from:C:\\office\\report.txt",
             "file:///C:/office/report.txt",
+            "generated-from:file:///C:/office/report.txt",
+            "generated-from:/Users/user/report.txt",
             "/home/user/report.txt",
         ):
             with self.subTest(origin=origin):

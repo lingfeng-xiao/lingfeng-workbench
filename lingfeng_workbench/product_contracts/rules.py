@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 
 from .auth import AuthenticatedPrincipal, require_authenticated
@@ -18,7 +17,14 @@ from .enums import (
     WorkState,
 )
 from .models import ContractObject
-from .validation import identifier, iso_timestamp, positive_version, sha256, summary
+from .validation import (
+    contains_local_path,
+    identifier,
+    iso_timestamp,
+    positive_version,
+    sha256,
+    summary,
+)
 
 WORK_TRANSITIONS = {
     WorkState.DRAFT: {WorkState.READY, WorkState.CANCELLED},
@@ -70,8 +76,6 @@ SAFE_SOURCE_MAP = {
     ArtifactSourceKind.SYNTHETIC_FIXTURE: CloudSafeKind.SYNTHETIC_FIXTURE,
     ArtifactSourceKind.USER_EXPORT: CloudSafeKind.USER_CONFIRMED_EXPORT,
 }
-ABSOLUTE_PATH = re.compile(r"^(?:[A-Za-z]:[\\/]|/|\\\\)")
-
 
 def validate_transition(record: ContractObject, next_state: str) -> None:
     current = getattr(record, "state", None)
@@ -257,7 +261,7 @@ def classify_artifact_candidate(
         or candidate.owner_id != provenance.owner_id
     ):
         raise PermissionError("artifact provenance does not match the candidate")
-    if ABSOLUTE_PATH.match(provenance.source_locator):
+    if contains_local_path(provenance.source_locator):
         raise PermissionError("local path content cannot cross the boundary")
     try:
         safe_kind = SAFE_SOURCE_MAP[provenance.source_kind]

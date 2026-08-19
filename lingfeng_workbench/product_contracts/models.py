@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from dataclasses import InitVar, asdict, dataclass
 from typing import Any, ClassVar
 
@@ -24,6 +23,7 @@ from .enums import (
 )
 from .validation import (
     commit_sha,
+    contains_local_path,
     identifier,
     iso_timestamp,
     opaque_workspace_ref,
@@ -33,9 +33,6 @@ from .validation import (
 )
 
 _PERSISTED = object()
-_LOCAL_ORIGIN = re.compile(
-    r"""(?ix)(?:file:/+|[a-z]:[\\/]|\\\\|(?:^|[\s("'=])/(?!/))"""
-)
 
 
 class ContractObject:
@@ -237,7 +234,7 @@ class ArtifactReference(ContractObject):
         object.__setattr__(self, "owner_id", identifier(self.owner_id, "owner_id"))
         object.__setattr__(self, "data_class", DataClass(self.data_class))
         object.__setattr__(self, "origin", summary(self.origin, "origin"))
-        if _LOCAL_ORIGIN.search(self.origin):
+        if contains_local_path(self.origin):
             raise PermissionError("Artifact origin must not contain a local absolute path")
         object.__setattr__(self, "sha256", sha256(self.sha256))
         if (
@@ -257,9 +254,12 @@ class ArtifactReference(ContractObject):
         if self.source_kind is not None:
             object.__setattr__(self, "source_kind", ArtifactSourceKind(self.source_kind))
         if self.source_locator is not None:
-            object.__setattr__(
-                self, "source_locator", summary(self.source_locator, "source_locator")
-            )
+            normalized_locator = summary(self.source_locator, "source_locator")
+            if contains_local_path(normalized_locator):
+                raise PermissionError(
+                    "Artifact source_locator must not contain a local absolute path"
+                )
+            object.__setattr__(self, "source_locator", normalized_locator)
         if self.policy_evidence is not None:
             object.__setattr__(
                 self, "policy_evidence", identifier(self.policy_evidence, "policy_evidence")

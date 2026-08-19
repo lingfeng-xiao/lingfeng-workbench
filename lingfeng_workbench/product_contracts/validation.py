@@ -10,6 +10,20 @@ IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 MAX_SUMMARY_CHARS = 800
+LOCAL_PATH = re.compile(
+    r"""(?ix)
+    (?:
+        file:(?:/{1,3}|[\\]+)
+        | [a-z]:[\\/]
+        | \\\\[^\\/\s]+[\\/]
+        | (?:^|[\s("'=:])/(?!/)
+    )
+    """
+)
+
+
+def contains_local_path(value: Any) -> bool:
+    return bool(LOCAL_PATH.search(str(value or "")))
 
 
 def identifier(value: Any, field: str) -> str:

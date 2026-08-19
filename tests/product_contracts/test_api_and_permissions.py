@@ -187,6 +187,29 @@ class PersistenceBoundaryTests(unittest.TestCase):
                 self.runtime2,
             )
 
+    def test_runtime_read_follows_persisted_run_mission_work_item_chain(self):
+        self.assertEqual(
+            "mission-1",
+            self.store.read(ObjectType.MISSION, "mission-1", self.runtime1).id,
+        )
+        self.assertEqual(
+            "wi-1",
+            self.store.read(ObjectType.WORK_ITEM, "wi-1", self.runtime1).id,
+        )
+        for principal, object_type, object_id in (
+            (self.runtime1, ObjectType.MISSION, "mission-2"),
+            (self.runtime1, ObjectType.WORK_ITEM, "wi-2"),
+            (self.runtime2, ObjectType.MISSION, "mission-1"),
+            (self.runtime2, ObjectType.WORK_ITEM, "wi-1"),
+        ):
+            with self.subTest(
+                runtime=principal.runtime_id,
+                object_type=object_type.value,
+                object_id=object_id,
+            ):
+                with self.assertRaises(PermissionError):
+                    self.store.read(object_type, object_id, principal)
+
     def test_all_ownership_and_relation_fields_are_immutable(self):
         attempts = (
             WorkItem(
