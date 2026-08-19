@@ -74,6 +74,9 @@ function assertRow(contract, row) {
     if (value !== null && !["string", "number", "boolean"].includes(typeof value)) {
       throw new RecoveryError("non_scalar_value_rejected");
     }
+    if (typeof value === "number" && !Number.isSafeInteger(value)) {
+      throw new RecoveryError("unsafe_number_rejected");
+    }
     if (value === null && !column.nullable) throw new RecoveryError("null_value_rejected");
     if (column.allowedValues && value !== null && !column.allowedValues.includes(value)) {
       throw new RecoveryError("state_value_rejected");
@@ -162,19 +165,46 @@ async function assertExport(authority, exported) {
   validateRows(authority, exported.tables);
 }
 
-export function createIsolatedRestoreTarget(db, metadata) {
+async function isolationTokenHash(token) {
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(token)));
+  return [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+export async function createIsolatedRestoreTarget(
+  db,
+  { token, nowMs = Date.now() } = {},
+) {
   if (
     !db?.prepare
     || !db?.batch
-    || metadata?.lifecycle !== "temporary"
-    || !/^gate0-temp-[a-z0-9-]{8,80}$/u.test(metadata.databaseName || "")
+    || typeof token !== "string"
+    || !/^[A-Za-z0-9_-]{32,128}$/u.test(token)
+    || !Number.isSafeInteger(nowMs)
   ) {
+    throw new RecoveryError("isolated_target_required");
+  }
+
+  let attestation;
+  try {
+    attestation = await db.prepare(
+      `UPDATE gate0_restore_isolation_attestations
+       SET consumed_at_ms = ?
+       WHERE token_hash = ?
+         AND purpose = 'gate0-isolated-restore'
+         AND consumed_at_ms IS NULL
+         AND expires_at_ms > ?
+       RETURNING database_name`,
+    ).bind(nowMs, await isolationTokenHash(token), nowMs).first();
+  } catch {
+    throw new RecoveryError("isolated_target_required");
+  }
+  if (!/^gate0-temp-[a-z0-9-]{8,80}$/u.test(attestation?.database_name || "")) {
     throw new RecoveryError("isolated_target_required");
   }
   return Object.freeze({
     brand: ISOLATED_TARGET,
     db,
-    databaseName: metadata.databaseName,
+    databaseName: attestation.database_name,
   });
 }
 
@@ -261,6 +291,16 @@ function postVerificationStatements(db, guard, authority, exported) {
       `(SELECT COUNT(*) FROM "${contract.name}") = ?`,
       [table.rows.length],
     ));
+    for (const row of table.rows) {
+      const columns = Object.keys(row).sort();
+      const predicates = columns.map((column) => `"${column}" IS ?`).join(" AND ");
+      statements.push(guardStatement(
+        db,
+        guard,
+        `(SELECT COUNT(*) FROM "${contract.name}" WHERE ${predicates}) = 1`,
+        columns.map((column) => row[column]),
+      ));
+    }
 
     for (const column of contract.columns) {
       if (column.allowedValues) {

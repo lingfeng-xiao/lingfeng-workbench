@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
+import { createHash, createHmac } from "node:crypto";
 import test from "node:test";
 
 import {
   D1NonceStore,
   Gate0AuthError,
   HERMES_AUDIENCE,
+  canonicalHermesRequest,
   createHermesSignature,
   createIsolatedTestNonceStore,
+  readBoundedRequestBody,
   requireBrowserAuthorization,
   requireHermesAuthorization,
 } from "../../app/gate0/auth.mjs";
@@ -178,5 +181,78 @@ test("future and expired signatures are rejected before nonce consumption", asyn
   await assert.rejects(
     requireHermesAuthorization(authorizationInput(expired)),
     (error) => error.ruleId === "hermes_timestamp_expired",
+  );
+});
+
+test("fixed Hermes vector matches an independent Node HMAC implementation", async () => {
+  const bodyBytes = encoder.encode("fixed-body");
+  const request = new Request(
+    "https://workbench.example/gate0/machine/health?z=9&a=1&a=0",
+    { method: "POST", body: bodyBytes },
+  );
+  const timestamp = "1800000000";
+  const nonce = "fixed_vector_nonce_01";
+  const bodyHash = createHash("sha256").update(bodyBytes).digest("hex");
+  const expectedCanonical = [
+    HERMES_AUDIENCE,
+    "POST",
+    "workbench.example",
+    "/gate0/machine/health",
+    "a=0&a=1&z=9",
+    bodyHash,
+    timestamp,
+    nonce,
+  ].join("\n");
+  const expectedSignature = createHmac("sha256", keyBytes)
+    .update(expectedCanonical)
+    .digest("base64url");
+
+  assert.equal(
+    await canonicalHermesRequest({
+      request,
+      bodyBytes,
+      timestamp,
+      nonce,
+      audience: HERMES_AUDIENCE,
+    }),
+    expectedCanonical,
+  );
+  assert.equal(
+    await createHermesSignature({
+      request,
+      bodyBytes,
+      timestamp,
+      nonce,
+      secret: keyBytes,
+      audience: HERMES_AUDIENCE,
+    }),
+    expectedSignature,
+  );
+});
+
+test("bounded request body rejects declared and streamed overflow", async () => {
+  const declared = new Request("https://workbench.example/gate0/machine/health", {
+    method: "POST",
+    body: "x",
+    headers: { "content-length": "65537" },
+  });
+  await assert.rejects(
+    readBoundedRequestBody(declared),
+    (error) => error.ruleId === "hermes_body_rejected",
+  );
+
+  const streamed = new Request("https://workbench.example/gate0/machine/health", {
+    method: "POST",
+    body: new ReadableStream({
+      start(controller) {
+        controller.enqueue(new Uint8Array(65_537));
+        controller.close();
+      },
+    }),
+    duplex: "half",
+  });
+  await assert.rejects(
+    readBoundedRequestBody(streamed),
+    (error) => error.ruleId === "hermes_body_rejected",
   );
 });

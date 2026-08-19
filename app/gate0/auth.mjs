@@ -99,7 +99,7 @@ async function hmac(secret, value) {
   return base64Url(new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(value))));
 }
 
-async function canonicalRequest({ request, bodyBytes, timestamp, nonce, audience }) {
+export async function canonicalHermesRequest({ request, bodyBytes, timestamp, nonce, audience }) {
   const url = new URL(request.url);
   const bodyHash = await sha256Hex(bodyBytes);
   return [
@@ -114,6 +114,45 @@ async function canonicalRequest({ request, bodyBytes, timestamp, nonce, audience
   ].join("\n");
 }
 
+export async function readBoundedRequestBody(request, maxBytes = 65_536) {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
+    throw new Gate0AuthError("hermes_body_rejected", 413);
+  }
+  const contentLength = request.headers.get("content-length");
+  if (contentLength !== null) {
+    if (!/^\d+$/u.test(contentLength) || Number(contentLength) > maxBytes) {
+      throw new Gate0AuthError("hermes_body_rejected", 413);
+    }
+  }
+  if (!request.body) return new Uint8Array();
+
+  const reader = request.body.getReader();
+  const chunks = [];
+  let length = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      length += value.byteLength;
+      if (length > maxBytes) {
+        await reader.cancel();
+        throw new Gate0AuthError("hermes_body_rejected", 413);
+      }
+      chunks.push(value);
+    }
+  } catch (error) {
+    if (error instanceof Gate0AuthError) throw error;
+    throw new Gate0AuthError("hermes_body_rejected", 413);
+  }
+  const bytes = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
 export async function createHermesSignature({
   request,
   bodyBytes,
@@ -125,7 +164,7 @@ export async function createHermesSignature({
   if (!(secret instanceof Uint8Array) || secret.byteLength < 32) {
     throw new Gate0AuthError("hermes_weak_key_rejected", 500);
   }
-  return hmac(secret, await canonicalRequest({ request, bodyBytes, timestamp, nonce, audience }));
+  return hmac(secret, await canonicalHermesRequest({ request, bodyBytes, timestamp, nonce, audience }));
 }
 
 export async function requireHermesAuthorization({

@@ -78,11 +78,38 @@ function populate(db, objectKey = "gate0-fixture/report.json") {
     .bind("blob-1", objectKey).run();
 }
 
-function target(db, suffix = "12345678") {
-  return createIsolatedRestoreTarget(db, {
-    lifecycle: "temporary",
-    databaseName: `gate0-temp-${suffix}`,
-  });
+async function isolationTokenHash(token) {
+  const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(token)));
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function provisionIsolation(db, suffix = "12345678") {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS gate0_restore_isolation_attestations (
+      token_hash TEXT PRIMARY KEY,
+      database_name TEXT NOT NULL,
+      purpose TEXT NOT NULL,
+      expires_at_ms INTEGER NOT NULL,
+      consumed_at_ms INTEGER
+    )
+  `);
+  const token = `gate0_isolation_${suffix}_0123456789abcdef`;
+  const nowMs = 1_800_000_000_000;
+  db.prepare(
+    `INSERT INTO gate0_restore_isolation_attestations
+     (token_hash, database_name, purpose, expires_at_ms, consumed_at_ms)
+     VALUES (?, ?, ?, ?, NULL)`,
+  ).bind(
+    await isolationTokenHash(token),
+    `gate0-temp-${suffix}`,
+    "gate0-isolated-restore",
+    nowMs + 60_000,
+  ).run();
+  return { token, nowMs };
+}
+
+async function target(db, suffix = "12345678") {
+  return createIsolatedRestoreTarget(db, await provisionIsolation(db, suffix));
 }
 
 function stable(value) {
@@ -124,7 +151,7 @@ test("schema version, table plan and rows come from checksum-bound migration aut
   ]);
   assert.equal(exported.migrationHistory[0].description, "Synthetic recovery authority");
 
-  const result = await restoreLogicalExport(target(restored), exported, { migrations });
+  const result = await restoreLogicalExport(await target(restored), exported, { migrations });
   assert.equal(result.checksum.length, 64);
   assert.deepEqual(result.counts, {
     fixture_parent: 1,
@@ -151,13 +178,13 @@ test("restore rejects forged target capability, schema and table plan before wri
   );
 
   await assert.rejects(
-    restoreLogicalExport(target(restored, "schema0001"), { ...exported, schemaVersion: "9999_other" }, { migrations }),
+    restoreLogicalExport(await target(restored, "schema0001"), { ...exported, schemaVersion: "9999_other" }, { migrations }),
     (error) => error.code === "schema_version_rejected",
   );
 
   const missingTable = await rechecksum({ ...exported, tables: exported.tables.slice(0, -1) });
   await assert.rejects(
-    restoreLogicalExport(target(restored, "tables0001"), missingTable, { migrations }),
+    restoreLogicalExport(await target(restored, "tables0001"), missingTable, { migrations }),
     (error) => error.code === "table_set_mismatch",
   );
   assert.equal(restored.prepare("SELECT COUNT(*) AS count FROM fixture_parent").first().count, 0);
@@ -192,14 +219,14 @@ test("checksum, cloud-safe reference and non-empty target are rejected before wr
   ));
   const badReference = await rechecksum({ ...exported, tables: badReferenceTables });
   await assert.rejects(
-    restoreLogicalExport(target(referenceTarget, "badref001"), badReference, { migrations }),
+    restoreLogicalExport(await target(referenceTarget, "badref001"), badReference, { migrations }),
     (error) => error.code === "cloud_safe_reference_rejected",
   );
 
   nonEmptyTarget.prepare("INSERT INTO fixture_parent(id, label) VALUES (?, ?)")
     .bind("existing", "keep").run();
   await assert.rejects(
-    restoreLogicalExport(target(nonEmptyTarget, "nonempty1"), exported, { migrations }),
+    restoreLogicalExport(await target(nonEmptyTarget, "nonempty1"), exported, { migrations }),
     (error) => error.code === "target_not_empty",
   );
   assert.equal(
@@ -234,15 +261,15 @@ test("post-write state verification runs in the same batch and rolls every row b
   const exported = await createLogicalExport(source, { migrations });
 
   restored.exec(`
-    CREATE TRIGGER mutate_fixture_state
-    AFTER INSERT ON fixture_child
+    CREATE TRIGGER mutate_fixture_label
+    AFTER INSERT ON fixture_parent
     BEGIN
-      UPDATE fixture_child SET state = 'mutated' WHERE id = NEW.id;
+      UPDATE fixture_parent SET label = 'another-valid-label' WHERE id = NEW.id;
     END;
   `);
 
   await assert.rejects(
-    restoreLogicalExport(target(restored, "postcheck"), exported, { migrations }),
+    restoreLogicalExport(await target(restored, "postcheck"), exported, { migrations }),
     (error) => error.code === "restore_transaction_failed",
   );
 
@@ -269,7 +296,7 @@ test("target migration history description tamper blocks restore authority", asy
   restored.prepare("UPDATE schema_migrations SET description = ?").bind("tampered").run();
 
   await assert.rejects(
-    restoreLogicalExport(target(restored, "authority"), exported, { migrations }),
+    restoreLogicalExport(await target(restored, "authority"), exported, { migrations }),
     (error) => error.code === "migration_authority_rejected",
   );
   assert.equal(restored.prepare("SELECT COUNT(*) AS count FROM fixture_parent").first().count, 0);
@@ -298,4 +325,56 @@ test("export aborts when migration authority changes before the read snapshot", 
     createLogicalExport(changingSource, { migrations }),
     (error) => error.code === "export_snapshot_changed",
   );
+});
+
+test("production-like databases cannot forge or replay restore isolation", async (t) => {
+  const productionLike = new SqliteD1();
+  const isolated = new SqliteD1();
+  t.after(() => productionLike.close());
+  t.after(() => isolated.close());
+  await setup(productionLike);
+  await setup(isolated);
+
+  await assert.rejects(
+    createIsolatedRestoreTarget(productionLike, {
+      token: "forged_isolation_token_0123456789",
+      nowMs: 1_800_000_000_000,
+      lifecycle: "temporary",
+      databaseName: "gate0-temp-forged001",
+    }),
+    (error) => error.code === "isolated_target_required",
+  );
+
+  const attestation = await provisionIsolation(isolated, "replay001");
+  await createIsolatedRestoreTarget(isolated, attestation);
+  await assert.rejects(
+    createIsolatedRestoreTarget(isolated, attestation),
+    (error) => error.code === "isolated_target_required",
+  );
+});
+
+test("restore rejects non-finite and unsafe numeric values before writes", async (t) => {
+  const source = new SqliteD1();
+  const restored = new SqliteD1();
+  t.after(() => source.close());
+  t.after(() => restored.close());
+  await setup(source);
+  await setup(restored);
+  populate(source);
+  const exported = await createLogicalExport(source, { migrations });
+  const isolatedTarget = await target(restored, "numbers01");
+
+  for (const unsafe of [Number.NaN, Number.POSITIVE_INFINITY, 9_007_199_254_740_992, 1.5]) {
+    const tables = exported.tables.map((table) => (
+      table.name === "fixture_parent"
+        ? { ...table, rows: [{ ...table.rows[0], label: unsafe }] }
+        : table
+    ));
+    const candidate = await rechecksum({ ...exported, tables });
+    await assert.rejects(
+      restoreLogicalExport(isolatedTarget, candidate, { migrations }),
+      (error) => error.code === "unsafe_number_rejected",
+    );
+  }
+  assert.equal(restored.prepare("SELECT COUNT(*) AS count FROM fixture_parent").first().count, 0);
 });

@@ -32,3 +32,24 @@ The source and synthetic tests do not prove real platform acceptance. Still inco
 - production D1/R2 cleanup and second empty check.
 
 Production D1 writes, migrations, restores, cleanup, R2 deletion and access expansion stop at G3. Saving/deploying or rolling back an exact Sites version stops at G4.
+
+## Independent-review hardening candidate
+
+This source revision intentionally keeps `/gate0/machine/health` disabled with
+`machine_edge_contract_unavailable` until Issue #10 establishes an official private-Sites
+machine-edge identity contract. Unofficial request headers and environment flags cannot enable it;
+the HMAC library remains covered for that future integration.
+
+The persistent nonce table now has checksum-bound source SQL and is copied to
+`dist/.openai/drizzle/0000_gate0_runtime.sql`. That production migration does not create
+`gate0_restore_isolation_attestations`. Isolation attestations belong only to independently
+provisioned temporary D1 databases and are consumed atomically with a one-time random token.
+
+Logical restore now verifies every exported field after insertion in the same D1 batch, so even a
+trigger that changes a value to another otherwise-valid value rolls the whole restore back. Request
+bodies are bounded before and during streaming, the HMAC canonical form has an independent fixed
+vector, and recovery rejects non-finite, fractional, and non-safe integers.
+
+Validation for this new exact head is pending until isolated GitHub Actions checks out that commit.
+No Sites version was saved or deployed, and no production D1/R2 operation was performed. Real
+temporary-D1 behavior remains Issue #12; machine edge and R2 pagination remain Issues #10 and #13.

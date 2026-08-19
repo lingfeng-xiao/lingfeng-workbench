@@ -9,3 +9,11 @@ The runner rejects duplicate versions, ordinals or names; gaps; unknown history;
 Logical export reads migration history and every contracted table through one read-only D1 batch; a history change at the snapshot boundary aborts the export. BLOB values are explicitly unsupported and rejected; no lossy JSON conversion occurs. Restore accepts only an opaque temporary-D1 capability, validates the complete export before writes, and puts inserts plus SQL post-verification guards into one atomic D1 batch. Any failed guard rolls back every inserted row.
 
 Hermes nonce consumption requires the infrastructure table described in `app/gate0/bindings.json`. Creating that table in the online database is not performed by this PR and remains a later G3-controlled physical migration.
+
+## Runtime nonce migration
+
+`0000_gate0_runtime.sql` is the authoritative checksum input for the persistent HMAC replay nonce
+store and is packaged under `dist/.openai/drizzle/`. It is prepared but not applied to production
+by this candidate. It deliberately excludes `gate0_restore_isolation_attestations`: that table may
+exist only in an independently provisioned temporary restore database, where a one-time random
+token is inserted out of band and atomically consumed before restore.

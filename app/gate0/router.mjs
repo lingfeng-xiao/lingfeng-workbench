@@ -1,7 +1,6 @@
 import {
   Gate0AuthError,
   requireBrowserAuthorization,
-  requireHermesAuthorization,
   safeAuditRecord,
 } from "./auth.mjs";
 import { assertTrustedSitesRuntime } from "./runtime.mjs";
@@ -25,20 +24,7 @@ export async function routeGate0(request, suppliedRuntime) {
     }
 
     if (url.pathname === "/gate0/machine/health") {
-      if (!["GET", "POST"].includes(request.method)) {
-        throw new Gate0AuthError("hermes_method_rejected", 405);
-      }
-      const bodyBytes = new Uint8Array(await request.arrayBuffer());
-      await requireHermesAuthorization({
-        request,
-        bodyBytes,
-        edgePrincipal: runtime.edgePrincipal,
-        expectedEdgeClientId: runtime.expectedEdgeClientId,
-        expectedHost: runtime.expectedHost,
-        secrets: runtime.hermesSecrets,
-        nonceStore: runtime.nonceStore,
-      });
-      return json(200, { status: "ok", audience: "hermes", request_id: runtime.requestId });
+      throw new Gate0AuthError("machine_edge_contract_unavailable", 503);
     }
 
     return json(404, { error: "not_found", request_id: runtime.requestId });

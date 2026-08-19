@@ -9,11 +9,12 @@ const execute = promisify(execFile);
 test("build emits a runnable Sites server artifact and logical binding manifest", async () => {
   await execute(process.execPath, ["app/gate0/build.mjs"], { cwd: process.cwd() });
 
-  const [entry, sourceHosting, artifactHosting, bindings] = await Promise.all([
+  const [entry, sourceHosting, artifactHosting, bindings, runtimeMigration] = await Promise.all([
     readFile("dist/server/index.js", "utf8"),
     readFile(".openai/hosting.json", "utf8"),
     readFile("dist/.openai/hosting.json", "utf8"),
     readFile("dist/.openai/bindings.json", "utf8"),
+    readFile("dist/.openai/drizzle/0000_gate0_runtime.sql", "utf8"),
   ]);
 
   assert.match(entry, /from "\.\/auth\.mjs"/u);
@@ -33,4 +34,7 @@ test("build emits a runnable Sites server artifact and logical binding manifest"
     manifest.runtime_tables.gate0_machine_nonces.join(" "),
     /nonce_key TEXT PRIMARY KEY/u,
   );
+  assert.equal(manifest.machine_edge_contract.status, "disabled");
+  assert.match(runtimeMigration, /CREATE TABLE IF NOT EXISTS gate0_machine_nonces/u);
+  assert.doesNotMatch(runtimeMigration, /gate0_restore_isolation_attestations/u);
 });

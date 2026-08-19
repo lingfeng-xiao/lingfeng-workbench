@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "logical_bindings": {
     "D1": {
       "name": "DB",
@@ -10,13 +10,19 @@
       "purpose": "Closed cloud-safe artifact allowlist only; never business tables or Node packages"
     }
   },
-  "required_server_variables": [
-    "SITES_HEADER_CONTRACT",
-    "ALLOWED_BROWSER_SUBJECT_IDS",
-    "HERMES_SITES_CLIENT_ID",
-    "HERMES_HMAC_KEYS",
-    "EXPECTED_SITE_HOST"
+  "active_server_variables": [
+    "ALLOWED_BROWSER_SUBJECT_IDS"
   ],
+  "machine_edge_contract": {
+    "status": "disabled",
+    "reason": "No official private Sites machine-edge identity contract is evidenced",
+    "tracking_issue": 10,
+    "deferred_server_variables": [
+      "HERMES_SITES_CLIENT_ID",
+      "HERMES_HMAC_KEYS",
+      "EXPECTED_SITE_HOST"
+    ]
+  },
   "runtime_tables": {
     "gate0_machine_nonces": [
       "nonce_key TEXT PRIMARY KEY",

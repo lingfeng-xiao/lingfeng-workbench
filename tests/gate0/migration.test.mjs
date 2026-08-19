@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
@@ -193,4 +194,28 @@ test("failed migration is atomic, unmarked and reports only a sanitized class", 
     0,
   );
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM schema_migrations").first().count, 1);
+});
+
+test("authoritative runtime nonce migration is checksum-bound and excludes restore attestation", async () => {
+  const sql = await readFile("migrations/gate0/0000_gate0_runtime.sql", "utf8");
+  const [runtimeMigration] = await prepareMigrationPlan([{
+    version: "0000_gate0_runtime",
+    description: "Create the persistent Gate 0 machine nonce store",
+    sql,
+    exportContract: {
+      tables: [{
+        name: "gate0_machine_nonces",
+        columns: [
+          { name: "nonce_key" },
+          { name: "expires_at_ms" },
+          { name: "consumed_at_ms" },
+        ],
+        primaryKey: ["nonce_key"],
+      }],
+    },
+  }]);
+  assert.equal(runtimeMigration.checksum.length, 64);
+  assert.equal(runtimeMigration.statements.length, 2);
+  assert.match(runtimeMigration.statements[0], /gate0_machine_nonces/u);
+  assert.doesNotMatch(sql, /gate0_restore_isolation_attestations/u);
 });
