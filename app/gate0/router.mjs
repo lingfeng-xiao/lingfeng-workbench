@@ -4,6 +4,7 @@ import {
   requireHermesAuthorization,
   safeAuditRecord,
 } from "./auth.mjs";
+import { assertTrustedSitesRuntime } from "./runtime.mjs";
 
 function json(status, value) {
   return new Response(JSON.stringify(value), {
@@ -12,37 +13,42 @@ function json(status, value) {
   });
 }
 
-export async function routeGate0(request, context) {
+export async function routeGate0(request, suppliedRuntime) {
+  const runtime = assertTrustedSitesRuntime(suppliedRuntime);
   const url = new URL(request.url);
-  const requestId = context.requestId || crypto.randomUUID();
 
   try {
     if (url.pathname === "/gate0/browser/health") {
-      requireBrowserAuthorization(context.browserPrincipal, context.allowedBrowserSubjects);
-      return json(200, { status: "ok", audience: "browser", request_id: requestId });
+      if (request.method !== "GET") throw new Gate0AuthError("browser_method_rejected", 405);
+      requireBrowserAuthorization(runtime.browserPrincipal, runtime.allowedBrowserSubjects);
+      return json(200, { status: "ok", audience: "browser", request_id: runtime.requestId });
     }
 
     if (url.pathname === "/gate0/machine/health") {
+      if (!["GET", "POST"].includes(request.method)) {
+        throw new Gate0AuthError("hermes_method_rejected", 405);
+      }
       const bodyBytes = new Uint8Array(await request.arrayBuffer());
       await requireHermesAuthorization({
         request,
         bodyBytes,
-        edgeIdentityAsserted: context.edgeMachineIdentityAsserted,
-        secrets: context.hermesSecrets,
-        nonceStore: context.nonceStore,
-        nowMs: context.nowMs,
+        edgePrincipal: runtime.edgePrincipal,
+        expectedEdgeClientId: runtime.expectedEdgeClientId,
+        expectedHost: runtime.expectedHost,
+        secrets: runtime.hermesSecrets,
+        nonceStore: runtime.nonceStore,
       });
-      return json(200, { status: "ok", audience: "hermes", request_id: requestId });
+      return json(200, { status: "ok", audience: "hermes", request_id: runtime.requestId });
     }
 
-    return json(404, { error: "not_found", request_id: requestId });
+    return json(404, { error: "not_found", request_id: runtime.requestId });
   } catch (error) {
     if (!(error instanceof Gate0AuthError)) throw error;
-    context.audit?.(safeAuditRecord({
+    runtime.audit(safeAuditRecord({
       ruleId: error.ruleId,
       status: error.status,
-      requestId,
+      requestId: runtime.requestId,
     }));
-    return json(error.status, { error: error.ruleId, request_id: requestId });
+    return json(error.status, { error: error.ruleId, request_id: runtime.requestId });
   }
 }

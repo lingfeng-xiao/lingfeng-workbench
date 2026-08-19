@@ -15,6 +15,10 @@ class Statement {
     return this.database.prepare(this.sql).run(...this.parameters);
   }
 
+  execute() {
+    return /^\\s*(select|pragma|with)\\b/iu.test(this.sql) ? this.all() : this.run();
+  }
+
   all() {
     return { results: this.database.prepare(this.sql).all(...this.parameters) };
   }
@@ -37,7 +41,7 @@ export class SqliteD1 {
   batch(statements) {
     this.database.exec("BEGIN IMMEDIATE");
     try {
-      const results = statements.map((statement) => statement.run());
+      const results = statements.map((statement) => statement.execute());
       this.database.exec("COMMIT");
       return results;
     } catch (error) {

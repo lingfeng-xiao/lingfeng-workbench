@@ -1,46 +1,34 @@
 # W0-B Gate 0 candidate evidence
 
-Status: implementation candidate only. This branch is not merged, saved as a Sites version, or deployed.
+Status: implementation candidate only. The branch is not merged, saved as a Sites version, or deployed.
 
-## Read-only platform baseline
+## Read-only baseline
 
-Read back on 2026-08-19:
+Read back on 2026-08-19: exactly one long-lived Lingfeng Workbench Site; it is active and custom/private with one owner and no viewers, editors, external visitors or groups. Current production remains version 3. Personal identity values are omitted.
 
-- exactly one long-lived Site named **Lingfeng Workbench**;
-- project `appgprj_6a841dad1a8881919399cc5bced2c838` is active with custom/private access;
-- one owner and no viewers, editors, external visitors or groups (personal identity values intentionally omitted);
-- current production is version 3;
-- no access-policy change, D1/R2 write, cleanup, restore, Site creation or deployment was performed.
-
-The repository binds the candidate to that existing project through `.openai/hosting.json`; it never calls create-site.
+No access-policy change, D1/R2 write, cleanup, restore, Site creation or deployment was performed.
 
 ## Candidate controls
 
-- Browser business authorization accepts only a server-provided human principal in the server-side subject allowlist. Page visibility is not authorization.
-- The machine route requires both a trusted Sites-edge assertion and an application HMAC for Hermes. Missing, expired, invalid and replayed claims are denied; audit events contain only rule, status and request ID.
-- The migration runner verifies a consecutive, checksum-bound history and uses atomic D1 batches.
-- Logical restore refuses online or non-empty targets and validates format, version, checksum, cloud-safe reference policy and relationships using synthetic data.
-- The static shell contains no product navigation, business objects or company context.
+- `npm run build` emits a real artifact at `dist/server/index.js`, imports authorization, routing, migration and recovery code, copies `dist/.openai/hosting.json`, and records logical D1 `DB` / R2 `ARTIFACTS` bindings.
+- Runtime identity is derived only from the named trusted Sites header contract. Caller context booleans and caller request IDs are ignored.
+- Browser authorization is server-side. Hermes requires the Sites machine principal plus a strong HMAC bound to audience, method, host, path, canonical query, body hash, timestamp and nonce.
+- Nonces are atomically consumed in D1. The in-memory implementation is available only through an explicitly named isolated-test factory and is not used by the runtime entry.
+- Migration identity covers version, description, SQL and export contract; duplicate/gap/unknown/tampered states fail with sanitized errors.
+- Export schema/table plans come from verified migration history. BLOBs are rejected. Restore validates checksum, table set, states, relationships and the closed cloud-safe prefixes before writes.
+- Restore requires an opaque temporary target capability. Inserts and post-write SQL guards share one D1 batch, so a failed guard rolls all rows back.
 
-## Cloud validation commands
+Cloud validation for each exact PR head is attached separately; this file never pre-claims a run.
 
-```sh
-npm test
-npm run build
-git diff --exit-code -- RECOVERY_MANIFEST.sha256 SERVER_RECOVERY.md
-```
+## Explicit external blockers
 
-The authoritative evidence is the GitHub Actions run attached to the exact PR head. This file does not claim a passing run before that run exists.
+The source and synthetic tests do not prove real platform acceptance. Still incomplete:
 
-## Explicit incomplete acceptance criteria
-
-The following are still incomplete and must not be inferred from source tests:
-
-- real authorized/unauthorized browser sessions against a saved candidate;
-- the positive Hermes path, because the current custom/private edge blocks machine requests before Worker execution;
+- browser positive/negative sessions against a saved candidate;
+- positive Hermes traffic through the current custom/private Sites edge;
 - readable R2 binding and paginated object evidence;
-- a real temporary D1 migration/restore rehearsal through the Sites control plane;
-- a GitHub-traceable saved Sites version and application rollback rehearsal;
+- a real temporary D1 migration/restore rehearsal through Sites;
+- GitHub-traceable saved Sites version and application rollback;
 - production D1/R2 cleanup and second empty check.
 
-Production D1 write/restore/cleanup, R2 deletion and access expansion stop at G3. Saving/deploying or rolling back an exact Sites version stops at G4.
+Production D1 writes, migrations, restores, cleanup, R2 deletion and access expansion stop at G3. Saving/deploying or rolling back an exact Sites version stops at G4.

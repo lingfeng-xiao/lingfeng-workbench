@@ -1,13 +1,11 @@
-# Gate 0 migration contract
+# Gate 0 migration and recovery contract
 
-This directory deliberately contains no v0.2 product schema. W0-B owns only the physical migration mechanism; W0-C owns logical product contracts, and a production v0.2 migration requires a later Proposal plus G3.
+This directory contains no v0.2 product schema. W0-B owns the generic physical mechanism and synthetic fixtures; W0-C owns logical product contracts. Any production physical migration remains a later G3 decision.
 
-A migration supplied to `db/gate0/migration-runner.mjs` has:
+Each migration supplies a consecutive `NNNN_name` version, a description, SQL sections separated by `-- gate0:statement`, and a checksum-covered export contract. The latest contract is the sole authority for schema version, table set, columns, primary keys, relationships, state values and cloud-safe reference columns. Callers cannot override those values during export or restore.
 
-- a consecutive `NNNN_name` version beginning at `0000`;
-- a non-empty description;
-- one SQL statement per section, separated by a line containing `-- gate0:statement`.
+The runner rejects duplicate versions, ordinals or names; gaps; unknown history; checksum or description changes; transaction controls; and direct migration-history writes. Errors report only sanitized classes.
 
-The runner rejects transaction controls and direct writes to `schema_migrations`. It hashes the normalized contract, compares the complete applied prefix, and executes every migration and its history insert through one atomic D1 `batch`. Unknown, skipped, changed and partially failed migrations are not accepted.
+Logical export reads migration history and every contracted table through one read-only D1 batch; a history change at the snapshot boundary aborts the export. BLOB values are explicitly unsupported and rejected; no lossy JSON conversion occurs. Restore accepts only an opaque temporary-D1 capability, validates the complete export before writes, and puts inserts plus SQL post-verification guards into one atomic D1 batch. Any failed guard rolls back every inserted row.
 
-Only synthetic fixtures are committed. Production exports, row contents, credentials and office paths must never enter GitHub.
+Hermes nonce consumption requires the infrastructure table described in `app/gate0/bindings.json`. Creating that table in the online database is not performed by this PR and remains a later G3-controlled physical migration.

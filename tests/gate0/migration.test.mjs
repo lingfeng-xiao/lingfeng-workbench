@@ -8,6 +8,45 @@ import {
 } from "../../db/gate0/migration-runner.mjs";
 import { SqliteD1 } from "./sqlite-d1.mjs";
 
+const oldContract = {
+  tables: [
+    {
+      name: "fixture_parent",
+      columns: [
+        { name: "id" },
+        { name: "label" },
+      ],
+      primaryKey: ["id"],
+    },
+    {
+      name: "fixture_child",
+      columns: [
+        { name: "id" },
+        { name: "parent_id" },
+        { name: "value" },
+      ],
+      primaryKey: ["id"],
+      foreignKeys: [{
+        columns: ["parent_id"],
+        references: { table: "fixture_parent", columns: ["id"] },
+      }],
+    },
+  ],
+};
+
+const currentContract = {
+  tables: [
+    oldContract.tables[0],
+    {
+      ...oldContract.tables[1],
+      columns: [
+        ...oldContract.tables[1].columns,
+        { name: "state", allowedValues: ["queued", "done"] },
+      ],
+    },
+  ],
+};
+
 const baseline = {
   version: "0000_gate0",
   description: "Synthetic Gate 0 baseline",
@@ -23,6 +62,7 @@ const baseline = {
       value TEXT NOT NULL
     )
   `,
+  exportContract: oldContract,
 };
 
 const upgrade = {
@@ -33,6 +73,7 @@ const upgrade = {
     -- gate0:statement
     CREATE INDEX fixture_child_parent_idx ON fixture_child(parent_id)
   `,
+  exportContract: currentContract,
 };
 
 test("empty database migrates and replay is idempotent", async (t) => {
@@ -65,30 +106,67 @@ test("synthetic old version upgrades without losing relationships or state", asy
   assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all().results, []);
 });
 
-test("unknown, gap and tampered histories are rejected", async (t) => {
+test("duplicate ordinal, duplicate name and gaps are rejected before SQL", async () => {
+  const secondOrdinalZero = {
+    ...baseline,
+    version: "0000_other",
+    description: "Other synthetic migration",
+  };
+  await assert.rejects(
+    prepareMigrationPlan([baseline, secondOrdinalZero]),
+    (error) => error instanceof MigrationError && error.code === "duplicate_ordinal",
+  );
+
+  const duplicateName = {
+    ...upgrade,
+    version: "0001_gate0",
+    description: "Duplicate synthetic name",
+  };
+  await assert.rejects(
+    prepareMigrationPlan([baseline, duplicateName]),
+    (error) => error.code === "duplicate_name",
+  );
+  await assert.rejects(
+    prepareMigrationPlan([upgrade]),
+    (error) => error.code === "migration_gap",
+  );
+});
+
+test("unknown, checksum-tampered and description-tampered histories are rejected", async (t) => {
   const unknown = new SqliteD1();
-  const tampered = new SqliteD1();
+  const checksumTampered = new SqliteD1();
+  const descriptionTampered = new SqliteD1();
   t.after(() => unknown.close());
-  t.after(() => tampered.close());
+  t.after(() => checksumTampered.close());
+  t.after(() => descriptionTampered.close());
 
   await migrate(unknown, [baseline]);
   unknown.prepare(
     "INSERT INTO schema_migrations(version, checksum, applied_at, description) VALUES (?, ?, ?, ?)",
   ).bind("9999_unknown", "0".repeat(64), "2026-08-19T00:00:00Z", "synthetic").run();
-  await assert.rejects(migrate(unknown, [baseline, upgrade]), (error) => error.code === "unknown_applied_migration");
-
-  await migrate(tampered, [baseline]);
-  tampered.prepare("UPDATE schema_migrations SET checksum = ? WHERE version = ?")
-    .bind("f".repeat(64), "0000_gate0").run();
-  await assert.rejects(migrate(tampered, [baseline]), (error) => error.code === "applied_migration_tampered");
-
   await assert.rejects(
-    prepareMigrationPlan([upgrade]),
-    (error) => error instanceof MigrationError && error.code === "migration_gap",
+    migrate(unknown, [baseline, upgrade]),
+    (error) => error.code === "unknown_applied_migration",
+  );
+
+  await migrate(checksumTampered, [baseline]);
+  checksumTampered.prepare("UPDATE schema_migrations SET checksum = ? WHERE version = ?")
+    .bind("f".repeat(64), "0000_gate0").run();
+  await assert.rejects(
+    migrate(checksumTampered, [baseline]),
+    (error) => error.code === "applied_migration_tampered",
+  );
+
+  await migrate(descriptionTampered, [baseline]);
+  descriptionTampered.prepare("UPDATE schema_migrations SET description = ? WHERE version = ?")
+    .bind("changed description", "0000_gate0").run();
+  await assert.rejects(
+    migrate(descriptionTampered, [baseline]),
+    (error) => error.code === "applied_migration_description_tampered",
   );
 });
 
-test("failed migration is atomic and never marked complete", async (t) => {
+test("failed migration is atomic, unmarked and reports only a sanitized class", async (t) => {
   const db = new SqliteD1();
   t.after(() => db.close());
   await migrate(db, [baseline]);
@@ -99,11 +177,17 @@ test("failed migration is atomic and never marked complete", async (t) => {
     sql: `
       CREATE TABLE fixture_partial(id TEXT PRIMARY KEY)
       -- gate0:statement
-      INSERT INTO table_that_does_not_exist(id) VALUES ('synthetic')
+      INSERT INTO table_that_does_not_exist(id) VALUES ('synthetic-sensitive-marker')
     `,
+    exportContract: currentContract,
   };
 
-  await assert.rejects(migrate(db, [baseline, broken]), (error) => error.code === "migration_failed");
+  await assert.rejects(
+    migrate(db, [baseline, broken]),
+    (error) => error.code === "migration_failed"
+      && error.message === "migration_failed"
+      && !error.message.includes("synthetic-sensitive-marker"),
+  );
   assert.equal(
     db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 'fixture_partial'").first().count,
     0,

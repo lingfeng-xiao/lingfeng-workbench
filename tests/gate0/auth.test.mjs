@@ -2,131 +2,181 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  D1NonceStore,
   Gate0AuthError,
-  MemoryNonceStore,
+  HERMES_AUDIENCE,
   createHermesSignature,
+  createIsolatedTestNonceStore,
   requireBrowserAuthorization,
   requireHermesAuthorization,
 } from "../../app/gate0/auth.mjs";
-import { routeGate0 } from "../../app/gate0/router.mjs";
+import { SqliteD1 } from "./sqlite-d1.mjs";
 
+const encoder = new TextEncoder();
 const nowMs = 1_800_000_000_000;
-const timestamp = String(Math.floor(nowMs / 1000));
-const nonce = "synthetic_nonce_0001";
 const keyId = "gate0-test";
-const keyBytes = new Uint8Array([83, 121, 110, 116, 104, 101, 116, 105, 99, 45, 75, 101, 121, 45, 48, 49]);
+const keyBytes = Uint8Array.from({ length: 32 }, (_, index) => index + 1);
+const edgePrincipal = Object.freeze({ kind: "sites-machine", clientId: "sites-hermes-client" });
 
-async function signedRequest(overrides = {}) {
-  const request = new Request("https://example.invalid/gate0/machine/health", {
-    method: "POST",
-    body: "",
-  });
+async function signed({
+  url = "https://workbench.example/gate0/machine/health?b=2&a=1",
+  method = "POST",
+  body = "synthetic-body",
+  timestamp = String(Math.floor(nowMs / 1000)),
+  nonce = "synthetic_nonce_0001",
+  secret = keyBytes,
+} = {}) {
+  const bodyBytes = encoder.encode(body);
+  const unsigned = new Request(url, { method, body: method === "GET" ? undefined : body });
   const signature = await createHermesSignature({
-    request,
-    bodyBytes: new Uint8Array(),
+    request: unsigned,
+    bodyBytes,
     timestamp,
     nonce,
-    secret: keyBytes,
+    secret,
+    audience: HERMES_AUDIENCE,
   });
   const headers = new Headers({
     "x-lf-hermes-key-id": keyId,
     "x-lf-hermes-timestamp": timestamp,
     "x-lf-hermes-nonce": nonce,
     "x-lf-hermes-signature": signature,
-    ...overrides,
   });
-  return new Request(request, { headers });
+  return {
+    request: new Request(url, { method, body: method === "GET" ? undefined : body, headers }),
+    bodyBytes,
+  };
 }
 
-function machineContext(overrides = {}) {
+function authorizationInput(candidate, overrides = {}) {
   return {
-    edgeIdentityAsserted: true,
+    request: candidate.request,
+    bodyBytes: candidate.bodyBytes,
+    edgePrincipal,
+    expectedEdgeClientId: "sites-hermes-client",
+    expectedHost: "workbench.example",
     secrets: new Map([[keyId, keyBytes]]),
-    nonceStore: new MemoryNonceStore(),
+    nonceStore: createIsolatedTestNonceStore(),
     nowMs,
     ...overrides,
   };
 }
 
-test("browser authorization is server-side and subject-scoped", () => {
+test("browser authorization accepts only a server-provided Sites human", () => {
   const allowed = new Set(["owner-subject"]);
-  assert.equal(requireBrowserAuthorization({ kind: "human", subject: "owner-subject" }, allowed).subject, "owner-subject");
+  assert.equal(
+    requireBrowserAuthorization({ kind: "sites-human", subject: "owner-subject" }, allowed).subject,
+    "owner-subject",
+  );
   assert.throws(
-    () => requireBrowserAuthorization(null, allowed),
+    () => requireBrowserAuthorization({ kind: "human", subject: "owner-subject" }, allowed),
     (error) => error instanceof Gate0AuthError && error.ruleId === "browser_identity_required",
   );
   assert.throws(
-    () => requireBrowserAuthorization({ kind: "human", subject: "someone-else" }, allowed),
-    (error) => error instanceof Gate0AuthError && error.ruleId === "browser_subject_forbidden",
+    () => requireBrowserAuthorization({ kind: "sites-human", subject: "other" }, allowed),
+    (error) => error.ruleId === "browser_subject_forbidden",
   );
 });
 
-test("Hermes requires both edge identity and application HMAC", async () => {
-  const request = await signedRequest();
+test("persistent D1 nonce consumption is atomic across store instances", async (t) => {
+  const db = new SqliteD1();
+  t.after(() => db.close());
+  db.exec(`
+    CREATE TABLE gate0_machine_nonces(
+      nonce_key TEXT PRIMARY KEY,
+      expires_at_ms INTEGER NOT NULL,
+      consumed_at_ms INTEGER NOT NULL
+    )
+  `);
+  const first = new D1NonceStore(db);
+  const second = new D1NonceStore(db);
+  assert.equal(await first.consume("key:nonce", nowMs + 60_000, nowMs), true);
+  assert.equal(await second.consume("key:nonce", nowMs + 60_000, nowMs), false);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM gate0_machine_nonces").first().count, 1);
+});
+
+test("Hermes requires edge identity, strong application key and one-time signature", async () => {
+  const candidate = await signed();
 
   await assert.rejects(
-    requireHermesAuthorization({ request, bodyBytes: new Uint8Array(), ...machineContext({ edgeIdentityAsserted: false }) }),
+    requireHermesAuthorization(authorizationInput(candidate, { edgePrincipal: null })),
     (error) => error.ruleId === "sites_machine_identity_required",
   );
-
-  const edgeOnly = new Request(request.url, { method: "POST" });
   await assert.rejects(
-    requireHermesAuthorization({ request: edgeOnly, bodyBytes: new Uint8Array(), ...machineContext() }),
-    (error) => error.ruleId === "hermes_key_rejected",
+    requireHermesAuthorization(authorizationInput(candidate, {
+      secrets: new Map([[keyId, new Uint8Array(16)]]),
+    })),
+    (error) => error.ruleId === "hermes_weak_key_rejected",
   );
 
-  const wrong = await signedRequest({ "x-lf-hermes-signature": "A".repeat(43) });
-  await assert.rejects(
-    requireHermesAuthorization({ request: wrong, bodyBytes: new Uint8Array(), ...machineContext() }),
-    (error) => error.ruleId === "hermes_signature_rejected",
-  );
-
-  const accepted = await requireHermesAuthorization({
-    request,
-    bodyBytes: new Uint8Array(),
-    ...machineContext(),
-  });
+  const context = authorizationInput(candidate);
+  const accepted = await requireHermesAuthorization(context);
   assert.equal(accepted.runtime, "hermes");
-});
-
-test("Hermes expiry and nonce replay are rejected", async () => {
-  const request = await signedRequest();
   await assert.rejects(
-    requireHermesAuthorization({
-      request,
-      bodyBytes: new Uint8Array(),
-      ...machineContext({ nowMs: nowMs + 301_000 }),
-    }),
-    (error) => error.ruleId === "hermes_timestamp_expired",
-  );
-
-  const context = machineContext();
-  await requireHermesAuthorization({ request, bodyBytes: new Uint8Array(), ...context });
-  await assert.rejects(
-    requireHermesAuthorization({ request, bodyBytes: new Uint8Array(), ...context }),
+    requireHermesAuthorization(context),
     (error) => error.ruleId === "hermes_replay_rejected",
   );
 });
 
-test("machine route emits sanitized denial evidence", async () => {
-  const audit = [];
-  const response = await routeGate0(
-    new Request("https://example.invalid/gate0/machine/health", { method: "POST" }),
-    {
-      requestId: "request-1",
-      edgeMachineIdentityAsserted: true,
-      hermesSecrets: new Map([[keyId, keyBytes]]),
-      nonceStore: new MemoryNonceStore(),
-      nowMs,
-      audit: (event) => audit.push(event),
-    },
+test("signature binds method, host, path, canonical query, body and audience", async () => {
+  const candidate = await signed();
+  const mutations = [
+    new Request("https://other.example/gate0/machine/health?b=2&a=1", {
+      method: "POST",
+      body: "synthetic-body",
+      headers: candidate.request.headers,
+    }),
+    new Request("https://workbench.example/gate0/machine/other?b=2&a=1", {
+      method: "POST",
+      body: "synthetic-body",
+      headers: candidate.request.headers,
+    }),
+    new Request("https://workbench.example/gate0/machine/health?b=3&a=1", {
+      method: "POST",
+      body: "synthetic-body",
+      headers: candidate.request.headers,
+    }),
+    new Request("https://workbench.example/gate0/machine/health?b=2&a=1", {
+      method: "POST",
+      body: "mutated-body",
+      headers: candidate.request.headers,
+    }),
+    new Request("https://workbench.example/gate0/machine/health?b=2&a=1", {
+      method: "PUT",
+      body: "synthetic-body",
+      headers: candidate.request.headers,
+    }),
+  ];
+
+  for (const request of mutations) {
+    const bodyBytes = request.method === "PUT" || request.method === "POST"
+      ? encoder.encode(await request.clone().text())
+      : new Uint8Array();
+    await assert.rejects(
+      requireHermesAuthorization(authorizationInput(
+        { request, bodyBytes },
+        request.url.includes("other.example") ? { expectedHost: "workbench.example" } : {},
+      )),
+      (error) => ["hermes_host_rejected", "hermes_signature_rejected", "hermes_method_rejected"].includes(error.ruleId),
+    );
+  }
+
+  await assert.rejects(
+    requireHermesAuthorization(authorizationInput(candidate, { audience: "mutated-audience" })),
+    (error) => error.ruleId === "hermes_signature_rejected",
   );
-  assert.equal(response.status, 401);
-  assert.deepEqual(audit, [{
-    event: "gate0_authorization",
-    rule_id: "hermes_key_rejected",
-    status: 401,
-    request_id: "request-1",
-  }]);
-  assert.doesNotMatch(JSON.stringify(audit), /x-lf-hermes|synthetic_nonce|A{43}/iu);
+});
+
+test("future and expired signatures are rejected before nonce consumption", async () => {
+  const future = await signed({ timestamp: String(Math.floor((nowMs + 31_000) / 1000)) });
+  await assert.rejects(
+    requireHermesAuthorization(authorizationInput(future)),
+    (error) => error.ruleId === "hermes_timestamp_future",
+  );
+
+  const expired = await signed({ timestamp: String(Math.floor((nowMs - 301_000) / 1000)) });
+  await assert.rejects(
+    requireHermesAuthorization(authorizationInput(expired)),
+    (error) => error.ruleId === "hermes_timestamp_expired",
+  );
 });

@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "logical_bindings": {
+    "D1": {
+      "name": "DB",
+      "purpose": "Gate 0 control metadata, migration history, and persistent nonce consumption"
+    },
+    "R2": {
+      "name": "ARTIFACTS",
+      "purpose": "Closed cloud-safe artifact allowlist only; never business tables or Node packages"
+    }
+  },
+  "required_server_variables": [
+    "SITES_HEADER_CONTRACT",
+    "ALLOWED_BROWSER_SUBJECT_IDS",
+    "HERMES_SITES_CLIENT_ID",
+    "HERMES_HMAC_KEYS",
+    "EXPECTED_SITE_HOST"
+  ],
+  "runtime_tables": {
+    "gate0_machine_nonces": [
+      "nonce_key TEXT PRIMARY KEY",
+      "expires_at_ms INTEGER NOT NULL",
+      "consumed_at_ms INTEGER NOT NULL"
+    ]
+  }
+}

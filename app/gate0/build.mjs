@@ -3,10 +3,26 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const output = resolve(here, "../../dist");
+const root = resolve(here, "../..");
+const output = resolve(root, "dist");
+const server = resolve(output, "server");
 
 await rm(output, { recursive: true, force: true });
-await mkdir(output, { recursive: true });
-await copyFile(resolve(here, "index.html"), resolve(output, "index.html"));
+await mkdir(server, { recursive: true });
+await mkdir(resolve(output, "public"), { recursive: true });
+await mkdir(resolve(output, ".openai"), { recursive: true });
 
-console.log("Gate 0 static shell built; no production deployment was performed.");
+const copies = [
+  [resolve(here, "server.mjs"), resolve(server, "index.js")],
+  [resolve(here, "auth.mjs"), resolve(server, "auth.mjs")],
+  [resolve(here, "router.mjs"), resolve(server, "router.mjs")],
+  [resolve(here, "runtime.mjs"), resolve(server, "runtime.mjs")],
+  [resolve(root, "db/gate0/migration-runner.mjs"), resolve(server, "migration-runner.mjs")],
+  [resolve(root, "db/gate0/logical-recovery.mjs"), resolve(server, "logical-recovery.mjs")],
+  [resolve(here, "index.html"), resolve(output, "public/index.html")],
+  [resolve(root, ".openai/hosting.json"), resolve(output, ".openai/hosting.json")],
+  [resolve(here, "bindings.json"), resolve(output, ".openai/bindings.json")],
+];
+for (const [source, destination] of copies) await copyFile(source, destination);
+
+console.log("Gate 0 Sites artifact built at dist/; no version was saved or deployed.");
