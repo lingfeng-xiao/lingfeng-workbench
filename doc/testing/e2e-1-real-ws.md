@@ -4,7 +4,7 @@ authority: release-candidate-evidence
 source_ref: v0.2.0-mvp1-rc1
 owner: integration
 superseded_by: null
-last_verified: 2026-08-19
+last_verified: 2026-08-20
 ---
 
 # E2E-1 真实 WS 尝试
@@ -25,3 +25,9 @@ last_verified: 2026-08-19
 ## 后续 Gate
 
 在能够确认 WS CLI 的认证、模型连接和非交互 `run --format json` 输出正常后，使用相同无工具 Mission 重跑。只有收到 digest 匹配且 `acceptanceStatus=PASSED` 的结构化终态，才可把真实 WS E2E 标为通过。
+
+## 认证跟进
+
+2026-08-20 在目标电脑核验：`ws providers list` 返回 0 credential，`ws models` 没有可用模型。这解释了真实 WS 进程没有任何模型输出的现象。
+
+随后启动官方 `ChatGPT Pro/Plus (browser)` OAuth 流程，尝试复用现有浏览器登录会话。授权页在可控浏览器中持续超时，WS 端保持等待，没有回调，也没有写入 credential。流程已取消，未输入密码、验证码或 API key，未绕过 CAPTCHA 或人工授权。恢复真实 E2E 前仍需要用户在目标电脑上完成一次官方登录，并先通过受超时限制的无工具 `ws run --format json` smoke。
