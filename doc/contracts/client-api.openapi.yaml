@@ -1,0 +1,336 @@
+openapi: 3.1.0
+info:
+  title: lingfeng-workbench Client API
+  version: 1.0.0
+  description: Generic client contract for Hermes, Sites Web, and other authorized clients.
+  license:
+    name: Proprietary
+    identifier: LicenseRef-Proprietary
+servers:
+  - url: /api/client/v1
+security:
+  - bearerAuth: []
+paths:
+  /work-items:
+    post:
+      operationId: createWorkItemWithMission
+      summary: Atomically create a WorkItem and its first Mission
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateWorkItemRequest'
+      responses:
+        '201':
+          description: Created or replayed idempotent result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreatedWorkItem'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    get:
+      operationId: listWorkItems
+      summary: List recent WorkItems with short control state
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+      responses:
+        '200':
+          description: WorkItems
+          content:
+            application/json:
+              schema:
+                type: array
+                maxItems: 100
+                items: { $ref: '#/components/schemas/WorkItemSummary' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /work-items/{workItemId}:
+    get:
+      operationId: getWorkItem
+      summary: Get one WorkItem with its Missions and Runs
+      parameters:
+        - $ref: '#/components/parameters/WorkItemId'
+      responses:
+        '200':
+          description: WorkItem detail with Missions and Runs
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkItemDetail' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /missions/{missionId}:
+    get:
+      operationId: getMission
+      summary: Get one Mission and its short Run projections
+      parameters:
+        - $ref: '#/components/parameters/MissionId'
+      responses:
+        '200':
+          description: Mission detail
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MissionDetail' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /runs/{runId}:
+    get:
+      operationId: getRun
+      summary: Get one Run and its short control timeline
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: Run detail and short timeline
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RunDetail' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /nodes:
+    get:
+      operationId: listNodes
+      summary: List Node online and capability projections
+      responses:
+        '200':
+          description: Node projections
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/NodeSummary' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /interactions:
+    get:
+      operationId: listInteractions
+      summary: Read-only Interaction listing in MVP-1
+      parameters:
+        - name: state
+          in: query
+          schema: { $ref: '#/components/schemas/InteractionState' }
+      responses:
+        '200':
+          description: Interactions
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/InteractionSummary' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { $ref: '#/components/schemas/Identifier' }
+    WorkItemId:
+      name: workItemId
+      in: path
+      required: true
+      schema: { type: string, pattern: '^wi_[A-Za-z0-9]+$' }
+    MissionId:
+      name: missionId
+      in: path
+      required: true
+      schema: { type: string, pattern: '^mi_[A-Za-z0-9]+$' }
+    RunId:
+      name: runId
+      in: path
+      required: true
+      schema: { type: string, pattern: '^run_[A-Za-z0-9]+$' }
+  responses:
+    BadRequest:
+      description: Invalid request
+      content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } }
+    Unauthorized:
+      description: Missing or invalid credential
+      content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } }
+    Forbidden:
+      description: Credential lacks the required scope
+      content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } }
+    NotFound:
+      description: Entity not found
+      content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } }
+    Conflict:
+      description: State or idempotency conflict
+      content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } }
+  schemas:
+    Identifier:
+      type: string
+      pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+    ShortText:
+      type: string
+      minLength: 1
+      maxLength: 800
+    Timestamp:
+      type: string
+      format: date-time
+    WorkItemStatus:
+      type: string
+      enum: [open, in_progress, completed, attention_required, cancelled]
+    MissionStatus:
+      type: string
+      enum: [pending, assigned, running, waiting_interaction, completed, failed, interrupted, uncertain, cancelled]
+    RunStatus:
+      type: string
+      enum: [assigned, running, waiting_interaction, completed, failed, interrupted, uncertain, cancelled]
+    InteractionState:
+      type: string
+      enum: [pending, resolved, delivered, consumed, expired, cancelled]
+    CreateWorkItemRequest:
+      type: object
+      additionalProperties: false
+      required: [title, objective, acceptanceSummary, authorizedSideEffectsSummary, targetNodeId, workspaceRef, runtimeKind, executionProfile, dataBoundaryAcknowledged]
+      properties:
+        title: { $ref: '#/components/schemas/ShortText' }
+        objective: { $ref: '#/components/schemas/ShortText' }
+        acceptanceSummary: { $ref: '#/components/schemas/ShortText' }
+        authorizedSideEffectsSummary: { $ref: '#/components/schemas/ShortText' }
+        targetNodeId: { $ref: '#/components/schemas/Identifier' }
+        workspaceRef: { $ref: '#/components/schemas/Identifier' }
+        runtimeKind: { $ref: '#/components/schemas/Identifier' }
+        executionProfile: { $ref: '#/components/schemas/Identifier' }
+        priority: { type: integer, minimum: -100, maximum: 100, default: 0 }
+        dataBoundaryAcknowledged: { type: boolean, const: true }
+    CreatedWorkItem:
+      type: object
+      additionalProperties: false
+      required: [workItemId, missionId, missionDigest, createdAt]
+      properties:
+        workItemId: { type: string }
+        missionId: { type: string }
+        missionDigest: { type: string, pattern: '^[a-f0-9]{64}$' }
+        createdAt: { $ref: '#/components/schemas/Timestamp' }
+    WorkItemSummary:
+      type: object
+      additionalProperties: false
+      required: [workItemId, title, status, priority, updatedAt]
+      properties:
+        workItemId: { type: string }
+        title: { $ref: '#/components/schemas/ShortText' }
+        status: { $ref: '#/components/schemas/WorkItemStatus' }
+        priority: { type: integer }
+        updatedAt: { $ref: '#/components/schemas/Timestamp' }
+    WorkItemDetail:
+      type: object
+      additionalProperties: false
+      required: [workItemId, title, status, priority, updatedAt, missions]
+      properties:
+        workItemId: { type: string }
+        title: { $ref: '#/components/schemas/ShortText' }
+        status: { $ref: '#/components/schemas/WorkItemStatus' }
+        priority: { type: integer }
+        updatedAt: { $ref: '#/components/schemas/Timestamp' }
+        missions:
+          type: array
+          items: { $ref: '#/components/schemas/MissionDetail' }
+    MissionDetail:
+      type: object
+      additionalProperties: false
+      required: [missionId, workItemId, revision, missionDigest, objective, acceptanceSummary, authorizedSideEffectsSummary, targetNodeId, workspaceRef, runtimeKind, executionProfile, status, runs, createdAt, updatedAt]
+      properties:
+        missionId: { type: string }
+        workItemId: { type: string }
+        revision: { type: integer, minimum: 1 }
+        missionDigest: { type: string, pattern: '^[a-f0-9]{64}$' }
+        objective: { $ref: '#/components/schemas/ShortText' }
+        acceptanceSummary: { $ref: '#/components/schemas/ShortText' }
+        authorizedSideEffectsSummary: { $ref: '#/components/schemas/ShortText' }
+        targetNodeId: { $ref: '#/components/schemas/Identifier' }
+        workspaceRef: { $ref: '#/components/schemas/Identifier' }
+        runtimeKind: { $ref: '#/components/schemas/Identifier' }
+        executionProfile: { $ref: '#/components/schemas/Identifier' }
+        status: { $ref: '#/components/schemas/MissionStatus' }
+        runs:
+          type: array
+          items: { $ref: '#/components/schemas/RunSummary' }
+        createdAt: { $ref: '#/components/schemas/Timestamp' }
+        updatedAt: { $ref: '#/components/schemas/Timestamp' }
+    RunSummary:
+      type: object
+      additionalProperties: false
+      required: [runId, missionId, nodeId, status, resumable, updatedAt]
+      properties:
+        runId: { type: string }
+        missionId: { type: string }
+        nodeId: { $ref: '#/components/schemas/Identifier' }
+        status: { $ref: '#/components/schemas/RunStatus' }
+        progressSummary: { $ref: '#/components/schemas/ShortText' }
+        resultSummary: { $ref: '#/components/schemas/ShortText' }
+        resumable: { type: boolean }
+        updatedAt: { $ref: '#/components/schemas/Timestamp' }
+    RunDetail:
+      type: object
+      additionalProperties: false
+      required: [runId, missionId, nodeId, status, resumable, updatedAt, timeline]
+      properties:
+        runId: { type: string }
+        missionId: { type: string }
+        nodeId: { $ref: '#/components/schemas/Identifier' }
+        status: { $ref: '#/components/schemas/RunStatus' }
+        progressSummary: { $ref: '#/components/schemas/ShortText' }
+        resultSummary: { $ref: '#/components/schemas/ShortText' }
+        resumable: { type: boolean }
+        updatedAt: { $ref: '#/components/schemas/Timestamp' }
+        timeline:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/TimelineEvent' }
+    TimelineEvent:
+      type: object
+      additionalProperties: false
+      required: [eventId, eventType, createdAt]
+      properties:
+        eventId: { type: string }
+        eventType: { $ref: '#/components/schemas/Identifier' }
+        summary: { $ref: '#/components/schemas/ShortText' }
+        createdAt: { $ref: '#/components/schemas/Timestamp' }
+    NodeSummary:
+      type: object
+      additionalProperties: false
+      required: [nodeId, displayName, status, capabilities, lastHeartbeatAt]
+      properties:
+        nodeId: { $ref: '#/components/schemas/Identifier' }
+        displayName: { $ref: '#/components/schemas/ShortText' }
+        status: { type: string, enum: [online, offline] }
+        capabilities:
+          type: array
+          items: { $ref: '#/components/schemas/Identifier' }
+        lastHeartbeatAt: { $ref: '#/components/schemas/Timestamp' }
+    InteractionSummary:
+      type: object
+      additionalProperties: false
+      required: [interactionId, runId, checkpointId, missionDigest, state, promptSummary, createdAt]
+      properties:
+        interactionId: { type: string }
+        runId: { type: string }
+        checkpointId: { $ref: '#/components/schemas/Identifier' }
+        missionDigest: { type: string, pattern: '^[a-f0-9]{64}$' }
+        state: { $ref: '#/components/schemas/InteractionState' }
+        promptSummary: { $ref: '#/components/schemas/ShortText' }
+        createdAt: { $ref: '#/components/schemas/Timestamp' }
+    ApiError:
+      type: object
+      additionalProperties: false
+      required: [code, message, requestId]
+      properties:
+        code: { $ref: '#/components/schemas/Identifier' }
+        message: { $ref: '#/components/schemas/ShortText' }
+        requestId: { $ref: '#/components/schemas/Identifier' }

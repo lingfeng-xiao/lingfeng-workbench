@@ -1,0 +1,32 @@
+#!/bin/sh
+set -eu
+
+project_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+wrapper_dir="$project_dir/.mvn/wrapper"
+wrapper_jar="$wrapper_dir/maven-wrapper.jar"
+
+if [ -z "${JAVA_HOME:-}" ] || [ ! -x "$JAVA_HOME/bin/java" ]; then
+  echo "JAVA_HOME must point to a Java 21 JDK." >&2
+  exit 1
+fi
+
+if [ ! -f "$wrapper_jar" ]; then
+  wrapper_url=$(sed -n 's/^wrapperUrl=//p' "$wrapper_dir/maven-wrapper.properties")
+  if [ -z "$wrapper_url" ]; then
+    echo "wrapperUrl is missing from maven-wrapper.properties." >&2
+    exit 1
+  fi
+  if command -v curl >/dev/null 2>&1; then
+    curl --fail --location --silent --show-error "$wrapper_url" --output "$wrapper_jar"
+  elif command -v wget >/dev/null 2>&1; then
+    wget --quiet "$wrapper_url" --output-document "$wrapper_jar"
+  else
+    echo "curl or wget is required for the first Maven Wrapper run." >&2
+    exit 1
+  fi
+fi
+
+exec "$JAVA_HOME/bin/java" \
+  -classpath "$wrapper_jar" \
+  "-Dmaven.multiModuleProjectDirectory=$project_dir" \
+  org.apache.maven.wrapper.MavenWrapperMain "$@"

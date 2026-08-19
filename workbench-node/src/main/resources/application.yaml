@@ -1,0 +1,19 @@
+spring:
+  application:
+    name: workbench-node
+  main:
+    web-application-type: none
+    banner-mode: "off"
+
+workbench:
+  node:
+    node-id: ${WORKBENCH_NODE_ID:}
+    display-name: ${WORKBENCH_NODE_DISPLAY_NAME:}
+    service-base-uri: ${WORKBENCH_SERVICE_BASE_URI:}
+    bearer-token: ${WORKBENCH_NODE_TOKEN:}
+    state-directory: ${WORKBENCH_NODE_STATE_DIR:./state}
+    poll-interval: ${WORKBENCH_NODE_POLL_INTERVAL:PT5S}
+    request-timeout: ${WORKBENCH_NODE_REQUEST_TIMEOUT:PT20S}
+    runtime-kind: ${WORKBENCH_RUNTIME_KIND:ws}
+    ws-executable: ${WORKBENCH_WS_EXECUTABLE:ws}
+    workspaces: {}

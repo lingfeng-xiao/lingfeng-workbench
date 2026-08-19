@@ -1,0 +1,17 @@
+target/
+node_modules/
+.vinext/
+.open-next/
+.cache/
+dist/
+coverage/
+*.db
+*.db-shm
+*.db-wal
+*.log
+__pycache__/
+*.py[cod]
+.env
+.env.local
+workbench-service/state/
+workbench-node/state/

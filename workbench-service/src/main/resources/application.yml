@@ -1,0 +1,30 @@
+spring:
+  application:
+    name: workbench-service
+  datasource:
+    url: ${WORKBENCH_DATABASE_URL:jdbc:sqlite:./var/workbench-service.db}
+    driver-class-name: org.sqlite.JDBC
+    hikari:
+      maximum-pool-size: 1
+      connection-init-sql: PRAGMA foreign_keys=ON
+      data-source-properties:
+        busy_timeout: 5000
+        journal_mode: WAL
+        synchronous: FULL
+  liquibase:
+    change-log: classpath:db/changelog/db.changelog-master.yaml
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: true
+    default-property-inclusion: non_null
+
+server:
+  max-http-request-header-size: 16KB
+
+workbench:
+  security:
+    hermes-token: ${WORKBENCH_HERMES_TOKEN:}
+    sites-token: ${WORKBENCH_SITES_TOKEN:}
+    node-tokens: {}
+  node:
+    offline-after: 90s
