@@ -14,7 +14,7 @@ last_verified: 2026-08-20
 - Java：Azul Zulu OpenJDK `21.0.12.1` LTS；
 - Service：真实可执行 JAR，通过临时自签 PKCS12 在随机 loopback 端口提供 HTTPS；
 - Node：真实非 Web 可执行 JAR，通过临时 truststore 只做出站 HTTPS；
-- Runtime：Node 模块的 deterministic `fake-session` Adapter，完整 Session/Turn/原始证据只写 Node 临时目录；
+- Runtime：fake Gate 使用 Node 模块的 deterministic `fake-session` Adapter；真实 Gate 使用本机 WS `0.0.0--202608171122`；完整 Session/Turn/原始证据只写 Node 临时目录；
 - Hermes：集成 harness 只调用冻结的 Notification/Interaction Client API，不发送真实微信；
 - Web：实际 `vinext build` 的 `dist/server/index.js`，使用双 Sites 身份 header 和 server-only read token 请求真实 Service；
 - 数据：两个场景各使用独立临时 Service SQLite、Node SQLite、workspace 和日志，不连接生产系统。
@@ -22,7 +22,7 @@ last_verified: 2026-08-20
 可重复 harness：`integration/control-loop-e2e.mjs`。本次证据目录：
 
 ```text
-D:\Users\ex_xiaolf7\AppData\Local\Temp\lingfeng-control-loop-e2e-N9Vp28
+D:\Users\ex_xiaolf7\AppData\Local\Temp\lingfeng-control-loop-e2e-Hbx3cR
 ```
 
 ## E2E-FLOW
@@ -30,8 +30,8 @@ D:\Users\ex_xiaolf7\AppData\Local\Temp\lingfeng-control-loop-e2e-N9Vp28
 精确标识：
 
 ```text
-workItemId    wi_46280ab6b5374fe698eac0294de9651d
-runId         run_50438e6f49a14831858850b75e0e9d3d
+workItemId    wi_cf3527973dd540e5b4d7b19921235ff7
+runId         run_1713b4950b414d389f623e427046c743
 missionDigest 6f586a2a8bcfadbe50549ba59beaef7c8ac336d3b8b836919d65e2135cb19008
 ```
 
@@ -53,11 +53,11 @@ missionDigest 6f586a2a8bcfadbe50549ba59beaef7c8ac336d3b8b836919d65e2135cb19008
 精确标识：
 
 ```text
-workItemId       wi_2f0ffc6188c14fb9ba2fa2a39a285436
-runId            run_62c5a9c6e498439ea9b8a94d2a74dda3
+workItemId       wi_8ef0886b8f5c4e37a7960e18d69e7033
+runId            run_9fe6e8d3e45a4b0bacd2c050426a3014
 interactionId    int_001
-notificationId   ntf_d1bca6fc3c95475cb9bd29c7d7e39094
-responseCommand  cmd_1a141356df7e49949191cfdf96b5190b
+notificationId   ntf_5cb347a049944ab8856060d56f5fb9e2
+responseCommand  cmd_b27906c0af394c59a31eeffbae8f6183
 ```
 
 结果：
@@ -79,7 +79,7 @@ responseCommand  cmd_1a141356df7e49949191cfdf96b5190b
 ```text
 Root Maven reactor: BUILD SUCCESS
 Service: 5 tests, 0 failure/error (v2 only)
-Node: 28 tests, 0 failure/error (v2 only, 9 suites)
+Node: 29 tests, 0 failure/error (v2 only, 9 suites)
 Web: 32 tests passed; lint passed; production build 5/5
 OpenAPI: v2 Client + v2 Node strict lint passed; old contracts/lint entries absent
 v2 fixtures: 26 positive/negative fixtures passed strict schema/boundary validation
@@ -92,39 +92,53 @@ Web production dependency audit: 0 vulnerabilities
 构建产物：
 
 ```text
-Service JAR  47,583,942 bytes  SHA-256 244E6D4A69392BD75A367D3A32E436E73DC004D75FFB4AD6407A005422BF9F4D
-Node JAR     27,919,691 bytes  SHA-256 A4795A348FF6F7C27521828718FAFF931861F07DF5CC2931704D3E70EA400D70
-Web worker      182,531 bytes  SHA-256 30CAFD997EACAEC2A1B565E906BEBF956DD87BAB97CE376AB918AD501F5B4450
+Service JAR  47,583,942 bytes  SHA-256 A7A2141FAD2C7400FF3F2ADF4238ADE8BAEDD64263534A944F8A99936407F9B7
+Node JAR     27,920,333 bytes  SHA-256 943FA8D53DA8D81BA49682CB0BD4FC25E65E3D5A03258DC8C83DD9CB4F6B7AEA
+Web worker      182,531 bytes  SHA-256 99C691DB94F4078A5F95C427D6A7789A1A17B0F2D986374BAE6CAE81AA5C9E6B
 ```
 
-## 真实 WS 受控尝试
+## 真实 WS 最小业务闭环
 
-可重复命令：`node integration/control-loop-e2e.mjs --real-ws`。本次使用真实 Service JAR、真实 Node JAR、真实 `ws.cmd`，Hermes 保持本地受控边界且未发送微信；证据目录：
+可重复命令：`node integration/control-loop-e2e.mjs --real-ws`，默认观察窗为 120 秒，可用 `WORKBENCH_REAL_WS_TIMEOUT_MS` 在 30 秒至 10 分钟内覆盖。本次使用上述最终 Service/Node JAR 和真实 `ws.cmd`；Hermes 保持本地受控边界且未发送微信。最终证据目录：
 
 ```text
-D:\Users\ex_xiaolf7\AppData\Local\Temp\lingfeng-control-loop-e2e-MfcIG0
-workItemId    wi_478628affdb444929f0ac2d1e2f3c06a
-runId         run_d45a6f45e87a476183cf5e221a701411
-missionDigest b1f157339097c9a97a263207f27c44ac5c21d868c3c328b3f5a7a5c31b17731b
+D:\Users\ex_xiaolf7\AppData\Local\Temp\lingfeng-control-loop-e2e-tOH2Kb
+workItemId    wi_1a03fd2e61c846988a7195a4517d3242
+runId         run_339aaccefe294a59bb6983e254843634
+missionDigest 42d413af4afd7b78b04314ce5826304dd6d57b060daf06a11641acfede07b3f3
+wsSessionId   ses_fe27959baffe0jHllmrR2WwEc0
 ```
 
-Service 创建并投递 START_RUN，Node 持久化命令、建立本地 Session 控制记录并提交 Turn 1。30 秒有界观察内，真实 WS 没有输出 Session ID、JSON 事件、stderr 或终态：`submittedTurns=1`、`finishedTurns=0`、`runtimeEventsBytes=0`、`runtimeStderrBytes=0`，Service Run 保持 `running`。harness 随后只终止本次 Node/WS/Service 进程树；最终审计无本轮残留进程。既有安装版 Node PID 29856 从未被本轮命令指向或修改，但在验证期间自行退出，最终计划任务状态为 Ready；本轮未擅自重启。
+真实任务为对 shipment counts `17, 23, 40` 计算并复核数量、总和和算术平均数。Service 创建并投递 `START_RUN`，Node 持久化命令并启动真实 WS；9 个原始 WS 事件只出现一个真实 Session ID。结果为：
 
-同轮动态检查：WS 版本 `0.0.0--202608171122`，`ws providers list` 为 0 credential，`ws models` 无条目。因此真实 Session 创建、同 Session 多 Turn、可信完成、digest/checkpoint/acceptance、Interaction 和活动 Run 重启恢复均未验证；不存在真实 Interaction ID。该结果是带证据的外部 Runtime 阻塞，不是成功。
+- `submittedTurns=3`、`finishedTurns=3`、Service 投影 `status=completed`；
+- terminal 为 `SUCCEEDED/PASSED`，digest 与创建响应完全一致；
+- result 为 `count=3`、`total=80`、`mean=26.6666666667 (≈26.67)`，可人工复算；
+- Node evidence 目录含 mission、commands、normalized/raw events、stderr、conversation、checkpoint 目录和 result；
+- `runtimeEventsBytes=3465`、`runtimeStderrBytes=0`，只出现一个 terminal；
+- harness 退出后无本轮 Service、Node 或 WS 子进程残留。
+
+直接命令 `ws.cmd run --format json` 同样成功返回结构化事件和真实 Session。`ws providers list` 的 0 credential 与 `ws models` 的空输出不能作为默认 agent/model 不可用的判据；真实 `run` smoke 和控制环结果才是本机当前可用性的证据。
+
+本轮没有完成真实 Interaction、真实 checkpoint/resume、Node 跨进程 Session 恢复、Service/Node 故障注入或 Service/Web 重启持久化。这些能力仍不得由 fake 证据外推。
 
 ## 运行中修复
 
-- 根 reactor 首次并发运行暴露 Node SQLite `SQLITE_BUSY`：ServiceConnectionLoop 落盘取消命令与 RunSupervisor 写事件竞争。`ControlLoopStore` 的所有写入口现以单写锁串行化；Node 28 项和根 reactor 重跑通过。
+- 根 reactor 首次并发运行暴露 Node SQLite `SQLITE_BUSY`：ServiceConnectionLoop 落盘取消命令与 RunSupervisor 写事件竞争。`ControlLoopStore` 的所有写入口现以单写锁串行化；Node 29 项和根 reactor 重跑通过。
 - 最终复验曾暴露 Mockito inline mock maker 在本机 JDK 21 上动态 attach 失败；Service 测试 JVM 现由 Maven Surefire 预加载 Mockito agent，不再依赖偶发的运行时自附加。无额外 attach 参数的 Service 5 项测试已重跑通过。
 - harness 的 Java 版本采集现跳过 `JAVA_TOOL_OPTIONS` 提示并提取真实 `java -version` 行；Windows 清理按本次子进程 PID 终止完整进程树，避免孤儿 WS。
 - Windows 的 Java `ProcessBuilder` 不会把裸 `ws` 解析为批处理入口；真实模式现通过 `where.exe ws.cmd` 解析绝对路径，同时保留 `WORKBENCH_WS_EXECUTABLE` 显式覆盖。修复后 Node preflight、注册和 Turn 1 提交均成功。
+- Java 启动的 WS 曾因子进程 stdin pipe 保持打开而等待 EOF、零输出；probe 和 Turn 执行现在启动后立即关闭 stdin，关闭失败时终止子进程并 fail closed。测试固定验证 stdin 已关闭。
+- WS terminal 曾先于最终 `TurnFinished` 到达，使 Run 进入 terminal 后忽略 Turn 完成；Session Adapter 现在实时转发普通事件、暂存 terminal，并严格按 `TurnFinished` 后 terminal 的顺序交付。
+- 初始合成 Mission 文案被真实 WS 正确识别为 scripted injection；改为可人工复算的真实小任务后，WS 又自然输出 `completed/passed` 而非协议枚举。通用提示现使用自然任务语义，并明确列出 `SUCCEEDED/FAILED/INTERRUPTED/UNKNOWN` 与 `PASSED/FAILED/UNKNOWN`；解释器仍严格拒绝不支持的状态，没有放宽合同或硬编码业务答案。
 - WS Adapter 不再使用 `--dir`，而是设置子进程工作目录；同进程多 Turn 使用真实观测到的 Session ID 和 `--session`，但没有证据时不宣称跨进程恢复。
 
 ## 尚未完成与 Gate
 
 - fake Runtime/Hermes 只证明冻结边界，不等同于真实 WS、真实 Hermes 或真实微信；
-- 真实 WS 当前 credential/model 阻塞仍存在；上述真实 Run 没有伪造 Session、Interaction 或成功终态；
+- R1 三个固定样本目前只完成“数字汇总”1 类，最终适配后已有连续 3 个成功 Run；短文本验收项、约束清单和三类样本 Gate 尚未完成；
+- 真实 Interaction、checkpoint/resume、Node 跨进程恢复、真实故障注入和 Service/Web 重启持久化尚未验证；
 - 未连接真实企业代理，proxy/TLS/401/403/407 使用独立边界测试；
 - Client API v2 没有公开取消 endpoint，`CANCEL_RUN` 仅由内部控制面测试生成；
-- 未执行 commit、merge、push、tag、release、服务器部署、Node 安装、Sites 发布、生产凭证操作、真实微信发送或遗留删除；
+- 本地验证未执行服务器部署、Node 安装、Sites 发布、生产凭证操作、真实微信发送或遗留删除；
 - 旧 Python、旧 D1、公司电脑源码开发边界和所有后续生产 Gate 保持不变。

@@ -15,6 +15,7 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 public final class WsSessionRuntimeAdapter implements SessionRuntimeAdapter, AutoCloseable {
@@ -64,10 +65,22 @@ public final class WsSessionRuntimeAdapter implements SessionRuntimeAdapter, Aut
     eventSink.accept(new NormalizedRuntimeEvent.TurnAccepted(turn.turnId()));
     return CompletableFuture.runAsync(
         () -> {
+          AtomicReference<NormalizedRuntimeEvent.Terminal> terminalEvent = new AtomicReference<>();
+          Consumer<NormalizedRuntimeEvent> orderedEventSink =
+              event -> {
+                if (event instanceof NormalizedRuntimeEvent.Terminal terminal) {
+                  terminalEvent.set(terminal);
+                } else {
+                  eventSink.accept(event);
+                }
+              };
           String sessionId =
-              runtime.executeTurn(state.context, turn, state.runtimeSessionId, eventSink);
+              runtime.executeTurn(state.context, turn, state.runtimeSessionId, orderedEventSink);
           state.runtimeSessionId = sessionId;
           eventSink.accept(new NormalizedRuntimeEvent.TurnFinished(turn.turnId()));
+          if (terminalEvent.get() != null) {
+            eventSink.accept(terminalEvent.get());
+          }
         },
         runtimeExecutor);
   }

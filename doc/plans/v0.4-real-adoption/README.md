@@ -22,15 +22,16 @@ last_verified: 2026-08-20
 5. Service、Node 或网络短暂中断后不重复 Runtime 副作用；
 6. 失败和不确定状态不会被解释为完成。
 
-## 2. 当前起点与外部阻塞
+## 2. 当前起点
 
 - v2-only Service、Node、Web、合同和 fake E2E 已通过；
-- 最新真实 Run `run_d45a6f45e87a476183cf5e221a701411` 已创建并提交 Turn 1；
-- WS `0.0.0--202608171122` 当前为 0 credential、无可用 model，因此没有真实 Session ID、事件或终态；
-- 真实 Interaction、真实 Hermes、微信、服务器 v0.3 部署、Node v0.3 安装和 Sites 新版本均未授权；
+- WS `0.0.0--202608171122` 的直接 `run` smoke 已返回结构化事件和真实 Session；Node/Service 真实控制环 Run `run_339aaccefe294a59bb6983e254843634` 已在唯一 Session `ses_fe27959baffe0jHllmrR2WwEc0` 完成 3/3 Turn 和可信 `SUCCEEDED/PASSED` terminal；
+- 最终适配后另有成功 Run `run_66ad1083a274422d8fa3cacd8849368b` 与 `run_14d0fc03221a4086b5fbf9ca098f2887`。R1 当前为连续成功 Run 3 个、固定样本类型 1/3；
+- `ws providers list` 的 0 credential 与 `ws models` 的空输出不是本机默认 agent/model 可用性的可靠判据，真实 `run` smoke 才是执行 Gate；
+- 真实 Interaction、checkpoint/resume、Service/Node 故障注入、服务器 v0.3 部署、Node v0.3 安装和 Sites 新版本均未验证或未授权；
 - 旧 Python、旧 D1 和当前安装版 v0.2 Node 继续受独立清理 Gate 保护。
 
-解除 credential/model 阻塞是 R0 的外部前置，不在仓库内保存 credential，也不允许为了让测试通过而伪造 Session 或 terminal。
+本轮曾保留三类真实失败证据：WS 瞬时 `no providers found`、合成 Mission 文案被拒绝、自然状态 `completed/passed` 被协议 fail closed。stdin EOF、terminal 顺序、自然任务提示和允许枚举均已针对性修复；不能删除这些失败证据或只记录成功样本。
 
 ## 3. 固定护栏
 
@@ -45,19 +46,17 @@ last_verified: 2026-08-20
 
 ## 4. 分阶段 Gate
 
-### R0：Runtime 就绪
-
-范围：只恢复官方 WS credential/model 可用性，不运行业务 Mission。
+### R0：Runtime 就绪（已通过）
 
 验收：
 
-- `ws providers list` 至少有一个明确 credential；
-- `ws models` 至少有一个本轮批准的 model；
-- `ws --version`、provider 和 model 快照落入本地证据，但不记录 secret；
-- 直接的 60 秒无工具 WS smoke 能输出结构化事件并正常退出；
-- Node `RuntimeProbe` 能在 15 秒内成功，错误时给出可诊断原因。
+- `ws --version` 成功并记录版本，不记录 secret；
+- 直接的 60 秒无工具 WS smoke 输出结构化事件、真实 Session ID 并正常退出；
+- Node `RuntimeProbe` 在 15 秒内成功，错误时给出可诊断原因；
+- `providers/models` 输出只作诊断信息，不覆盖真实 smoke 的执行证据；
+- 无凭证、Session 原始内容或本地路径进入 Service/Web 投影。
 
-停止条件：登录失败、model 不可用、需要生产 credential、输出包含 secret 或 smoke 超时。
+停止条件：直接 smoke 登录失败、默认 agent/model 不可用、需要生产 credential、输出包含 secret 或 smoke 超时。
 
 ### R1：本机真实无工具三 Turn
 
@@ -70,6 +69,8 @@ last_verified: 2026-08-20
 3. 根据给定约束生成不超过五项的执行清单。
 
 每个样本必须在同一 Session 内完成三个 Turn。至少连续成功 3 个 Run，且一次失败也必须可解释、可重跑而不覆盖原证据。
+
+当前进度：数字汇总样本已在最终适配后连续成功 3 次；短文本验收项与约束清单尚未运行，因此 R1 未完成。
 
 验收：
 
@@ -153,18 +154,15 @@ Service/Web 最终投影
 
 回退动作限于停止本轮临时进程、禁用本轮 credential/config、保留 SQLite/WAL/日志并回到最后一个 fake E2E 通过的构建。不得 reset、清理证据、删除旧资产或用人工 SQL 修改状态。
 
-## 7. 近期执行顺序
+## 7. 下一轮：R1 收口
 
-```text
-R0 credential/model 就绪
-  -> 1 个直接 WS smoke
-  -> 1 个真实控制环 Run
-  -> 连续 3 个固定样本 Run
-  -> Service 中断恢复
-  -> Node/ACK 幂等故障注入
-  -> 能力允许时做受控 Interaction
-  -> 每日 1 Run 的七日 canary
-  -> 再评审文件工具、真实 Hermes 和部署 Gate
-```
+下一轮不扩大副作用边界，只完成 R1：
 
-下一次执行只授权到 R0 和 R1；后续 R2-R4 需基于上一阶段证据逐项确认。
+1. 用“给定短文本整理三条验收项”完成一个真实 3 Turn Run；
+2. 用“根据给定约束生成不超过五项的执行清单”完成一个真实 3 Turn Run；
+3. 每个 Run 都核对唯一 Session、`submittedTurns=3`、`finishedTurns=3`、digest、`SUCCEEDED/PASSED`、本地 evidence 完整性和 stderr；
+4. 对两个 Run 均读取 Service 最小投影并使用 Web production Worker 渲染；至少对最后一个 Run 使用同一 SQLite 重启 Service 后再次查询和渲染，确认 completed 投影持久化；
+5. 扫描 Service SQLite/WAL 与 Web 输出，拒绝 Session ID、workspace 路径、原始对话、runtime events 或凭证泄漏；
+6. 保留所有成功和失败目录，把两个新样本接入当前连续成功序列。如果任一 Run 进入 UNKNOWN、Session 漂移、terminal 不可信或 evidence 不完整，立即停止 R1 扩量并回到单样本定位。
+
+R1 全部通过后只提交 R2 的单变量故障注入执行单，不自动开始 R2。建议的首个 R2 canary 是 Turn 2 期间仅中断 Service，验证真实 WS Session 在 Node 内继续、outbox 重放后 Service/Web 收敛；Node 重启、Interaction、真实 Hermes/微信、文件工具、部署和安装继续分别等待新的 Gate。

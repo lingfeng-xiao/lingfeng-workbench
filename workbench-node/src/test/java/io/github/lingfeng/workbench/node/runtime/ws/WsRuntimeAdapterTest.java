@@ -10,6 +10,7 @@ import io.github.lingfeng.workbench.node.runtime.session.SessionContext;
 import io.github.lingfeng.workbench.node.runtime.session.TurnInput;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
@@ -46,6 +47,7 @@ class WsRuntimeAdapterTest {
             .formatted(objectMapper.writeValueAsString(terminal));
     AtomicReference<List<String>> launchedCommand = new AtomicReference<>();
     AtomicReference<Path> workingDirectory = new AtomicReference<>();
+    AtomicReference<StubProcess> launchedProcess = new AtomicReference<>();
     WsRuntimeAdapter adapter =
         new WsRuntimeAdapter(
             "ws",
@@ -53,7 +55,9 @@ class WsRuntimeAdapterTest {
             (command, directory) -> {
               launchedCommand.set(command);
               workingDirectory.set(directory);
-              return new StubProcess(stdout, "private stderr", 0);
+              StubProcess process = new StubProcess(stdout, "private stderr", 0);
+              launchedProcess.set(process);
+              return process;
             });
     List<NormalizedRuntimeEvent> events = new ArrayList<>();
     SessionContext context =
@@ -82,9 +86,17 @@ class WsRuntimeAdapterTest {
         .anySatisfy(
             argument ->
                 assertThat(argument)
-                    .contains(DIGEST, "Acceptance summary", "Authorized side effects")
+                    .contains(
+                        DIGEST,
+                        "local Workbench task",
+                        "Acceptance criteria",
+                        "Allowed side effects",
+                        "Return exactly one JSON object",
+                        "SUCCEEDED, FAILED, INTERRUPTED, UNKNOWN",
+                        "PASSED, FAILED, UNKNOWN")
                     .doesNotContain("\r", "\n"));
     assertThat(workingDirectory.get()).isEqualTo(context.workspace());
+    assertThat(launchedProcess.get().stdinClosed()).isTrue();
   }
 
   @Test
@@ -126,7 +138,16 @@ class WsRuntimeAdapterTest {
     private final InputStream stdout;
     private final InputStream stderr;
     private final int exitCode;
+    private final OutputStream stdin =
+        new ByteArrayOutputStream() {
+          @Override
+          public void close() throws IOException {
+            stdinClosed = true;
+            super.close();
+          }
+        };
     private boolean alive = true;
+    private boolean stdinClosed;
 
     StubProcess(String stdout, String stderr, int exitCode) {
       this.stdout = new ByteArrayInputStream(stdout.getBytes(StandardCharsets.UTF_8));
@@ -136,7 +157,7 @@ class WsRuntimeAdapterTest {
 
     @Override
     public OutputStream getOutputStream() {
-      return new ByteArrayOutputStream();
+      return stdin;
     }
 
     @Override
@@ -180,6 +201,10 @@ class WsRuntimeAdapterTest {
     @Override
     public boolean isAlive() {
       return alive;
+    }
+
+    boolean stdinClosed() {
+      return stdinClosed;
     }
   }
 }
