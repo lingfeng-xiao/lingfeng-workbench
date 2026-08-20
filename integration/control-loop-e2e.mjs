@@ -39,6 +39,7 @@ const evidenceRoot = await mkdtemp(join(tmpdir(), "lingfeng-control-loop-e2e-"))
 const tls = await createLocalTls(evidenceRoot);
 const realWsMode = process.argv.includes("--real-ws");
 const realWsExecutable = realWsMode ? resolveWsExecutable() : null;
+const realWsObservationMs = realWsMode ? resolveRealWsObservationMs() : null;
 const summary = realWsMode
   ? {
       executedAt: new Date().toISOString(),
@@ -79,13 +80,15 @@ async function runRealWsScenario(scenarioDirectory) {
 
   try {
     await waitForNodeRegistration(port);
-    const created = await createWorkItem(
-      port,
-      "real-ws-create-key",
-      "Real WS three-Turn no-tool control loop",
-      "ws",
-      "Use one Agent Session for three no-tool Turns and return the trusted terminal only on Turn 3");
-    const deadline = Date.now() + 30_000;
+    const created = await createWorkItem(port, {
+      idempotencyKey: "real-ws-create-key",
+      title: "Real WS shipment-count calculation",
+      runtimeKind: "ws",
+      objective: "Given shipment counts 17, 23, and 40, calculate the item count, total, and arithmetic mean, then verify the arithmetic",
+      acceptanceSummary: "The verified result states count=3, total=80, and arithmetic mean=26.6666666667 (approximately 26.67)",
+      authorizedSideEffectsSummary: "No tools, file changes, network requests, or external side effects",
+    });
+    const deadline = Date.now() + realWsObservationMs;
     let detail;
     do {
       detail = await getWorkItem(port, created.workItemId);
@@ -112,6 +115,7 @@ async function runRealWsScenario(scenarioDirectory) {
       wsSessionId: sessionMatch ? sessionMatch[1] : null,
       runtimeEventsBytes: Buffer.byteLength(runtimeEvents),
       runtimeStderrBytes: Buffer.byteLength(stderr),
+      observationWindowMs: realWsObservationMs,
       nodeEvidenceDirectory: runDirectory,
       blocker: detail.run.status === "completed" ? null
         : "WS did not produce a trusted three-Turn terminal within the bounded observation window",
@@ -135,7 +139,10 @@ async function runFlowScenario(scenarioDirectory) {
 
   try {
     await waitForNodeRegistration(port);
-    const created = await createWorkItem(port, "flow-create-key", "E2E FLOW with Service outage");
+    const created = await createWorkItem(port, {
+      idempotencyKey: "flow-create-key",
+      title: "E2E FLOW with Service outage",
+    });
     await waitFor(async () => {
       const detail = await getWorkItem(port, created.workItemId);
       return detail.run.status === "running" ? detail : null;
@@ -222,7 +229,10 @@ async function runNotificationScenario(scenarioDirectory) {
 
   try {
     await waitForNodeRegistration(port);
-    const created = await createWorkItem(port, "notify-create-key", "E2E NOTIFY same Session resume");
+    const created = await createWorkItem(port, {
+      idempotencyKey: "notify-create-key",
+      title: "E2E NOTIFY same Session resume",
+    });
     const pendingInteraction = await waitFor(async () => {
       const interactions = await requestJson(port, "/api/client/v2/interactions?state=pending&limit=100", {
         token: sitesToken,
@@ -487,10 +497,14 @@ async function waitForNodeRegistration(port) {
 
 async function createWorkItem(
   port,
-  idempotencyKey,
-  title,
-  runtimeKind = "fake-session",
-  objective = "Complete three deterministic Turns using one local Agent Session",
+  {
+    idempotencyKey,
+    title,
+    runtimeKind = "fake-session",
+    objective = "Complete three deterministic Turns using one local Agent Session",
+    acceptanceSummary = "Matching digest and explicit SUCCEEDED PASSED terminal",
+    authorizedSideEffectsSummary = "Local temporary evidence only",
+  },
 ) {
   return requestJson(port, "/api/client/v2/work-items", {
     token: creatorToken,
@@ -500,8 +514,8 @@ async function createWorkItem(
     body: {
       title,
       objective,
-      acceptanceSummary: "Matching digest and explicit SUCCEEDED PASSED terminal",
-      authorizedSideEffectsSummary: "Local temporary evidence only",
+      acceptanceSummary,
+      authorizedSideEffectsSummary,
       targetNodeId: nodeId,
       workspaceRef,
       runtimeKind,
@@ -626,6 +640,15 @@ function resolveWsExecutable() {
   assert.equal(discovered.status, 0, "WS executable was not found on PATH");
   assert.ok(executable, "WS executable was not found on PATH");
   return executable;
+}
+
+function resolveRealWsObservationMs() {
+  const value = Number.parseInt(process.env.WORKBENCH_REAL_WS_TIMEOUT_MS || "120000", 10);
+  assert.ok(
+    Number.isSafeInteger(value) && value >= 30_000 && value <= 600_000,
+    "WORKBENCH_REAL_WS_TIMEOUT_MS must be an integer from 30000 to 600000",
+  );
+  return value;
 }
 
 async function stopChild(child) {

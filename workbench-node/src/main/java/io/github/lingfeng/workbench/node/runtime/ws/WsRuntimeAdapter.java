@@ -54,6 +54,7 @@ public final class WsRuntimeAdapter {
     Process process;
     try {
       process = processLauncher.start(List.of(executable, "--version"), Path.of("."));
+      process.getOutputStream().close();
       boolean finished = process.waitFor(15, TimeUnit.SECONDS);
       if (!finished) {
         process.destroyForcibly();
@@ -106,6 +107,13 @@ public final class WsRuntimeAdapter {
       process = processLauncher.start(command, context.workspace());
     } catch (IOException exception) {
       eventSink.accept(unknownTerminal(context, "WS failed to start"));
+      return expectedSessionId;
+    }
+    try {
+      process.getOutputStream().close();
+    } catch (IOException exception) {
+      process.destroyForcibly();
+      eventSink.accept(unknownTerminal(context, "WS stdin could not be closed"));
       return expectedSessionId;
     }
     if (!activeProcess.compareAndSet(null, process)) {
@@ -264,21 +272,22 @@ public final class WsRuntimeAdapter {
   }
 
   private static String prompt(NodeCommand.StartRun command, TurnInput turn) {
-    String contract =
-        "Mission digest: %s | Objective: %s | Acceptance summary: %s | Authorized side effects: %s | "
+    String taskContext =
+        ("You are completing a local Workbench task. Task: %s Acceptance criteria: %s "
+                + "Allowed side effects: %s Task reference digest: %s ")
             .formatted(
-                command.binding().missionDigest(),
                 command.objective(),
                 command.acceptanceSummary(),
-                command.authorizedSideEffectsSummary());
+                command.authorizedSideEffectsSummary(),
+                command.binding().missionDigest());
     if (turn.turnNumber() < FINAL_TURN) {
-      return (contract
-              + "This is Turn %d of %d in the same Agent Session. Preserve the Mission context, perform no tools or external writes, provide one short progress sentence, and do not emit a terminal event.")
+      return (taskContext
+              + "This is step %d of %d in the same Agent Session. Work on the task, stay within the allowed side effects, and reply with one concise progress sentence. Keep the task open for the next step and do not report final completion yet.")
           .formatted(turn.turnNumber(), FINAL_TURN)
           .replaceAll("[\\r\\n]+", " ");
     }
-    return (contract
-            + "This is the final Turn %d of %d in the same Agent Session. Complete the no-tool Mission and emit exactly one JSON object with type=lingfeng.terminal, missionDigest=%s, runtimeOutcome, acceptanceStatus, and resultSummary (at most 800 characters). Do not wrap the JSON in markdown.")
+    return (taskContext
+            + "This is the final step %d of %d in the same Agent Session. Complete the task and evaluate the acceptance criteria honestly. Return exactly one JSON object with type=lingfeng.terminal and missionDigest=%s. runtimeOutcome must be exactly one uppercase value from SUCCEEDED, FAILED, INTERRUPTED, UNKNOWN. acceptanceStatus must be exactly one uppercase value from PASSED, FAILED, UNKNOWN, and PASSED is valid only with SUCCEEDED. Include resultSummary of at most 800 characters. Do not wrap the JSON in markdown or add surrounding prose.")
         .formatted(FINAL_TURN, FINAL_TURN, command.binding().missionDigest())
         .replaceAll("[\\r\\n]+", " ");
   }
