@@ -22,7 +22,7 @@ last_verified: 2026-08-20
 可重复 harness：`integration/control-loop-e2e.mjs`。本次证据目录：
 
 ```text
-D:\Users\ex_xiaolf7\AppData\Local\Temp\lingfeng-control-loop-e2e-Hbx3cR
+D:\Users\ex_xiaolf7\AppData\Local\Temp\lingfeng-control-loop-e2e-XKKaVB
 ```
 
 ## E2E-FLOW
@@ -30,8 +30,8 @@ D:\Users\ex_xiaolf7\AppData\Local\Temp\lingfeng-control-loop-e2e-Hbx3cR
 精确标识：
 
 ```text
-workItemId    wi_cf3527973dd540e5b4d7b19921235ff7
-runId         run_1713b4950b414d389f623e427046c743
+workItemId    wi_19cf04f14a384f8581414201c3ab5b50
+runId         run_8e95648a9bd942b09154f77a3778e4b1
 missionDigest 6f586a2a8bcfadbe50549ba59beaef7c8ac336d3b8b836919d65e2135cb19008
 ```
 
@@ -53,11 +53,11 @@ missionDigest 6f586a2a8bcfadbe50549ba59beaef7c8ac336d3b8b836919d65e2135cb19008
 精确标识：
 
 ```text
-workItemId       wi_8ef0886b8f5c4e37a7960e18d69e7033
-runId            run_9fe6e8d3e45a4b0bacd2c050426a3014
+workItemId       wi_dfcc8c496b4c4844bbbf6ceaf0eb0b9b
+runId            run_c179c08750af46f9add084bf9f889141
 interactionId    int_001
-notificationId   ntf_5cb347a049944ab8856060d56f5fb9e2
-responseCommand  cmd_b27906c0af394c59a31eeffbae8f6183
+notificationId   ntf_38c971963a7b411c88cad66321aad6ae
+responseCommand  cmd_9d10dae5fde74016b357be4eb059241f
 ```
 
 结果：
@@ -79,7 +79,7 @@ responseCommand  cmd_b27906c0af394c59a31eeffbae8f6183
 ```text
 Root Maven reactor: BUILD SUCCESS
 Service: 5 tests, 0 failure/error (v2 only)
-Node: 29 tests, 0 failure/error (v2 only, 9 suites)
+Node: 33 tests, 0 failure/error (v2 only, 9 suites)
 Web: 32 tests passed; lint passed; production build 5/5
 OpenAPI: v2 Client + v2 Node strict lint passed; old contracts/lint entries absent
 v2 fixtures: 26 positive/negative fixtures passed strict schema/boundary validation
@@ -92,9 +92,9 @@ Web production dependency audit: 0 vulnerabilities
 构建产物：
 
 ```text
-Service JAR  47,583,942 bytes  SHA-256 A7A2141FAD2C7400FF3F2ADF4238ADE8BAEDD64263534A944F8A99936407F9B7
-Node JAR     27,920,333 bytes  SHA-256 943FA8D53DA8D81BA49682CB0BD4FC25E65E3D5A03258DC8C83DD9CB4F6B7AEA
-Web worker      182,531 bytes  SHA-256 99C691DB94F4078A5F95C427D6A7789A1A17B0F2D986374BAE6CAE81AA5C9E6B
+Service JAR  47,583,942 bytes  SHA-256 336FF21DA02FAB18481DCCB576DEE253E6FE81080B6381BC1D6DD3A6A17505D1
+Node JAR     27,920,583 bytes  SHA-256 68226067E7BF3C417EC61FB7317D7A1E6448D9382B0FD865A195D36FC50442A5
+Web worker      182,531 bytes  SHA-256 4F1FA3746C6959FF72534F2A88EBEBC739EB842A7226E76B191991B989972022
 ```
 
 ## 真实 WS 最小业务闭环
@@ -120,11 +120,42 @@ wsSessionId   ses_fe27959baffe0jHllmrR2WwEc0
 
 直接命令 `ws.cmd run --format json` 同样成功返回结构化事件和真实 Session。`ws providers list` 的 0 credential 与 `ws models` 的空输出不能作为默认 agent/model 不可用的判据；真实 `run` smoke 和控制环结果才是本机当前可用性的证据。
 
-本轮没有完成真实 Interaction、真实 checkpoint/resume、Node 跨进程 Session 恢复、Service/Node 故障注入或 Service/Web 重启持久化。这些能力仍不得由 fake 证据外推。
+该数值 canary 没有覆盖文件工具、Git、真实 Interaction、Node 跨进程 Session 恢复或 Service/Web 重启持久化。后续真实开发 Gate 的证据见下一节。
+
+## 真实 WS 代码开发与完整投影闭环
+
+`--real-ws-development` 从显式环境变量接收 workspace、任务、验收和授权副作用，并继续通过真实 Service 创建 WorkItem、由真实 Node 直接启动 WS；Codex/Bridge 不进入执行路径。普通 `--real-ws` 仍保持 120 秒默认、10 分钟上限；开发模式使用 30 分钟默认、60 分钟硬上限。Hermes 继续为本地边界，未发送真实消息。
+
+最终成功证据：
+
+```text
+evidenceRoot  D:\Users\ex_xiaolf7\AppData\Local\Temp\lingfeng-control-loop-e2e-Ay5CE2
+workItemId    wi_0871184b4cd14a599166b1d53b31e03e
+runId         run_8de0fc38500a48bba303823bd56f7254
+missionDigest ea1605757291157bb9c3714000eef04e9448164c0de2388a016bc024536f3c3b
+wsSessionId   ses_fe2162583ffeFqjuc64UZdkvut
+commit        2a8d23badfe3753273cf3f8334950014bec41879
+```
+
+任务是修复真实 WS 第 3 Turn 会先输出验收摘要、再输出 `lingfeng.terminal` JSON 时 Node 错误降级为 `UNKNOWN` 的适配问题。真实 WS 审查并完成两个 Node 文件，新增正确终态、错 digest、非法状态和畸形 JSON 的正反测试，运行聚焦测试、重建 Node JAR、运行 fake FLOW/NOTIFY，创建提交 `2a8d23b` 并推送远端分支。完整产品闭环结果：
+
+- Service 投递 Mission，Node 直接启动本机 `ws.cmd`，没有使用 `delegate-to-ws` 或 Bridge；
+- `submittedTurns=3`、`finishedTurns=3`，三个 Turn 使用唯一 Session `ses_fe2162583ffeFqjuc64UZdkvut`；
+- 最终 `RUN_TERMINAL` 为 `SUCCEEDED/PASSED`，Mission digest 精确匹配，Service 投影 `completed`；
+- WS 实际创建并推送 `2a8d23b`，远端 `origin/codex/df-0.4-real-workflow-projection` 与本地 HEAD 精确一致；
+- production Web Worker 在 Service 重启前显示相同标题与已完成；Service 使用同一端口、同一 TLS、同一 SQLite 重启后，同一 WorkItem 仍为 completed，Web 再次显示已完成；
+- Node Run 目录保留 222,225 bytes 原始事件、14,259 bytes 归一化事件、完整 result、mission、commands、checkpoint 目录和 0-byte stderr；
+- 停止 Node/Service 后扫描 Service SQLite/WAL，未出现真实 WS Session ID、workspace 绝对路径、`runtime-events.ndjson` 或 `conversation.ndjson`。
+
+真实开发过程中保留了三次 fail-closed 证据，均未伪报成功：
+
+1. `lingfeng-control-loop-e2e-Z5RApm` 暴露 WS 工具 cwd 回落到用户目录；Run 被主动中止，随后 Node-only prompt 显式绑定本地 workspace，提交为 `2380ec8`。
+2. `lingfeng-control-loop-e2e-jcm9i4` 的 WS 已开发、测试、提交并推送 `1f312c9`，但 10 分钟观察窗到期时只有 1/3 Turn 完成，Service 仍为 running；该 Run 保持 blocker。开发模式观察窗随后由 WS 提交 `b4d5c02` 扩为有界 30/60 分钟。
+3. `lingfeng-control-loop-e2e-lMDPx8` 完成 3/3 Turn、同 Session、提交并推送 `b4d5c02`，但真实 WS 在终态 JSON 前输出摘要，旧 Node 只接受整段纯 JSON，故正确降级为 uncertain；该证据直接驱动 `2a8d23b`，最终成功 Run 复验通过。
 
 ## 运行中修复
 
-- 根 reactor 首次并发运行暴露 Node SQLite `SQLITE_BUSY`：ServiceConnectionLoop 落盘取消命令与 RunSupervisor 写事件竞争。`ControlLoopStore` 的所有写入口现以单写锁串行化；Node 29 项和根 reactor 重跑通过。
+- 根 reactor 首次并发运行暴露 Node SQLite `SQLITE_BUSY`：ServiceConnectionLoop 落盘取消命令与 RunSupervisor 写事件竞争。`ControlLoopStore` 的所有写入口现以单写锁串行化；当前 Node 33 项和根 reactor 重跑通过。
 - 最终复验曾暴露 Mockito inline mock maker 在本机 JDK 21 上动态 attach 失败；Service 测试 JVM 现由 Maven Surefire 预加载 Mockito agent，不再依赖偶发的运行时自附加。无额外 attach 参数的 Service 5 项测试已重跑通过。
 - harness 的 Java 版本采集现跳过 `JAVA_TOOL_OPTIONS` 提示并提取真实 `java -version` 行；Windows 清理按本次子进程 PID 终止完整进程树，避免孤儿 WS。
 - Windows 的 Java `ProcessBuilder` 不会把裸 `ws` 解析为批处理入口；真实模式现通过 `where.exe ws.cmd` 解析绝对路径，同时保留 `WORKBENCH_WS_EXECUTABLE` 显式覆盖。修复后 Node preflight、注册和 Turn 1 提交均成功。
@@ -132,12 +163,15 @@ wsSessionId   ses_fe27959baffe0jHllmrR2WwEc0
 - WS terminal 曾先于最终 `TurnFinished` 到达，使 Run 进入 terminal 后忽略 Turn 完成；Session Adapter 现在实时转发普通事件、暂存 terminal，并严格按 `TurnFinished` 后 terminal 的顺序交付。
 - 初始合成 Mission 文案被真实 WS 正确识别为 scripted injection；改为可人工复算的真实小任务后，WS 又自然输出 `completed/passed` 而非协议枚举。通用提示现使用自然任务语义，并明确列出 `SUCCEEDED/FAILED/INTERRUPTED/UNKNOWN` 与 `PASSED/FAILED/UNKNOWN`；解释器仍严格拒绝不支持的状态，没有放宽合同或硬编码业务答案。
 - WS Adapter 不再使用 `--dir`，而是设置子进程工作目录；同进程多 Turn 使用真实观测到的 Session ID 和 `--session`，但没有证据时不宣称跨进程恢复。
+- 仅设置 `ProcessBuilder.directory(workspace)` 不足以约束真实 WS 工具 cwd；Node-only prompt 现在附带绝对 workspace 并要求所有文件和 shell 工具只使用该目录。路径仍只留 Node/WS 本地边界，不进入 Service。
+- 真实开发首轮超过原 10 分钟 canary 窗口；开发模式现单独使用 30 分钟默认、60 分钟硬上限，普通无工具 canary 的 120 秒默认和 10 分钟上限不变。
+- 真实 WS 最终 Turn 可能先写一段摘要再写合法 terminal JSON。Adapter 现在在 assistant text 中定位 JSON 对象后仍交给原 digest/status 解释器；错误 digest、非法状态和畸形对象继续 fail closed，不以普通完成文本替代终态。
 
 ## 尚未完成与 Gate
 
 - fake Runtime/Hermes 只证明冻结边界，不等同于真实 WS、真实 Hermes 或真实微信；
-- R1 三个固定样本目前只完成“数字汇总”1 类，最终适配后已有连续 3 个成功 Run；短文本验收项、约束清单和三类样本 Gate 尚未完成；
-- 真实 Interaction、checkpoint/resume、Node 跨进程恢复、真实故障注入和 Service/Web 重启持久化尚未验证；
+- 旧 R1 三个无工具固定样本只完成“数字汇总”1 类；本轮已额外完成一次带文件、测试、Git commit/push 的真实开发 Run，但只有 1 个完整 green 开发闭环，尚不足以直接进入无人值守日常使用；
+- Service/Web 同库重启持久化已由真实开发 Run 验证；真实 Interaction、checkpoint/resume、Node 跨进程恢复、真实 WS 执行期间的 Service/Node 故障注入仍未验证；
 - 未连接真实企业代理，proxy/TLS/401/403/407 使用独立边界测试；
 - Client API v2 没有公开取消 endpoint，`CANCEL_RUN` 仅由内部控制面测试生成；
 - 本地验证未执行服务器部署、Node 安装、Sites 发布、生产凭证操作、真实微信发送或遗留删除；

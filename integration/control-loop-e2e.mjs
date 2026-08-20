@@ -37,9 +37,14 @@ await Promise.all([access(javaExecutable), access(keytoolExecutable), access(ser
 
 const evidenceRoot = await mkdtemp(join(tmpdir(), "lingfeng-control-loop-e2e-"));
 const tls = await createLocalTls(evidenceRoot);
-const realWsMode = process.argv.includes("--real-ws");
+const realWsDevelopmentMode = process.argv.includes("--real-ws-development");
+const realWsMode = realWsDevelopmentMode || process.argv.includes("--real-ws");
 const realWsExecutable = realWsMode ? resolveWsExecutable() : null;
-const realWsObservationMs = realWsMode ? resolveRealWsObservationMs() : null;
+const realWsObservationMs = realWsMode ? resolveRealWsObservationMs(realWsDevelopmentMode) : null;
+const realWsScenario = realWsMode ? resolveRealWsScenario(realWsDevelopmentMode) : null;
+if (realWsDevelopmentMode) {
+  await access(realWsScenario.workspace);
+}
 const summary = realWsMode
   ? {
       executedAt: new Date().toISOString(),
@@ -57,7 +62,9 @@ const summary = realWsMode
 await writeFile(join(evidenceRoot, "summary.json"), JSON.stringify(summary, null, 2), "utf8");
 console.log(JSON.stringify(summary, null, 2));
 console.log(realWsMode
-  ? "Real WS control-loop attempt completed; inspect realWs.status and blocker evidence."
+  ? summary.realWs.blocker
+    ? "Real WS control-loop attempt ended without completion; inspect realWs.blocker and blocker evidence."
+    : "Real WS control-loop attempt verified persistence across Service restart; inspect realWs.proof."
   : "E2E-FLOW and E2E-NOTIFY passed with real Service/Node JARs and the Web production build.");
 
 async function runRealWsScenario(scenarioDirectory) {
@@ -65,8 +72,12 @@ async function runRealWsScenario(scenarioDirectory) {
   const port = await reservePort();
   const serviceState = join(scenarioDirectory, "service");
   const nodeState = join(scenarioDirectory, "node");
-  const workspace = join(scenarioDirectory, "workspace-no-tools");
-  await Promise.all([mkdir(serviceState), mkdir(nodeState), mkdir(workspace)]);
+  const workspace = realWsScenario.workspace || join(scenarioDirectory, "workspace-no-tools");
+  await Promise.all([
+    mkdir(serviceState),
+    mkdir(nodeState),
+    ...(realWsScenario.workspace ? [] : [mkdir(workspace)]),
+  ]);
   const serviceDatabase = join(serviceState, "service.db");
   let service = await startService({ scenarioDirectory, serviceDatabase, port });
   let node = await startNode({
@@ -82,11 +93,11 @@ async function runRealWsScenario(scenarioDirectory) {
     await waitForNodeRegistration(port);
     const created = await createWorkItem(port, {
       idempotencyKey: "real-ws-create-key",
-      title: "Real WS shipment-count calculation",
+      title: realWsScenario.title,
       runtimeKind: "ws",
-      objective: "Given shipment counts 17, 23, and 40, calculate the item count, total, and arithmetic mean, then verify the arithmetic",
-      acceptanceSummary: "The verified result states count=3, total=80, and arithmetic mean=26.6666666667 (approximately 26.67)",
-      authorizedSideEffectsSummary: "No tools, file changes, network requests, or external side effects",
+      objective: realWsScenario.objective,
+      acceptanceSummary: realWsScenario.acceptanceSummary,
+      authorizedSideEffectsSummary: realWsScenario.authorizedSideEffectsSummary,
     });
     const deadline = Date.now() + realWsObservationMs;
     let detail;
@@ -102,23 +113,118 @@ async function runRealWsScenario(scenarioDirectory) {
     const runtimeEvents = await readFile(join(runDirectory, "runtime-events.ndjson"), "utf8").catch(() => "");
     const stderr = await readFile(join(runDirectory, "runtime-stderr.log"), "utf8").catch(() => "");
     const sessionMatch = runtimeEvents.match(/"sessionID"\s*:\s*"([^"]+)"/);
+    const wsSessionId = sessionMatch ? sessionMatch[1] : null;
+    const submittedTurns = Number(querySqlite(join(nodeState, "node.db"),
+      "SELECT COUNT(*) FROM control_turn"));
+    const finishedTurns = Number(querySqlite(join(nodeState, "node.db"),
+      "SELECT COUNT(*) FROM control_turn WHERE state='finished'"));
+    const terminalStatus = detail.run.status;
+    const isCompleted = terminalStatus === "completed";
+
+    if (!isCompleted) {
+      return {
+        workItemId: created.workItemId,
+        runId: created.runId,
+        missionDigest: created.missionDigest,
+        status: terminalStatus,
+        resultSummary: detail.run.resultSummary || null,
+        submittedTurns,
+        finishedTurns,
+        wsSessionId,
+        runtimeEventsBytes: Buffer.byteLength(runtimeEvents),
+        runtimeStderrBytes: Buffer.byteLength(stderr),
+        observationWindowMs: realWsObservationMs,
+        developmentMode: realWsDevelopmentMode,
+        nodeEvidenceDirectory: runDirectory,
+        blocker: "WS did not produce a trusted three-Turn terminal within the bounded observation window",
+        blockerEvidence: {
+          terminalStatus,
+          observationWindowExceeded: Date.now() >= deadline,
+          runtimeEventsPreview: runtimeEvents.slice(0, 2000),
+          stderrPreview: stderr.slice(0, 2000),
+        },
+        webRenderedBeforeRestart: false,
+        webRenderedAfterRestart: false,
+        serviceRestarted: false,
+        serviceRestarts: 0,
+        serviceEvidenceScanned: false,
+        serviceEvidenceClean: false,
+        proof: {
+          claim: "fail-closed",
+          reason: "Run did not reach completed status",
+          terminalStatus,
+        },
+      };
+    }
+
+    const webHtmlBeforeRestart = await renderProductionWeb(port, `/work-items/${created.workItemId}`);
+    assert.ok(webHtmlBeforeRestart.includes(realWsScenario.title),
+      "Web render before restart did not contain the WorkItem title");
+    assert.match(webHtmlBeforeRestart, /已完成/);
+
+    await stopChild(service);
+    service = null;
+    service = await startService({ scenarioDirectory, serviceDatabase, port });
+
+    const afterRestart = await getWorkItem(port, created.workItemId);
+    assert.equal(afterRestart.run.status, "completed");
+
+    const webHtmlAfterRestart = await renderProductionWeb(port, `/work-items/${created.workItemId}`);
+    assert.ok(webHtmlAfterRestart.includes(realWsScenario.title),
+      "Web render after restart did not contain the WorkItem title");
+    assert.match(webHtmlAfterRestart, /已完成/);
+
+    await stopChild(node);
+    node = null;
+    await stopChild(service);
+    service = null;
+
+    const forbiddenEvidence = [
+      wsSessionId,
+      workspace,
+      "runtime-events.ndjson",
+      "conversation.ndjson",
+    ].filter(Boolean);
+    await assertServiceContainsNoLocalEvidence(serviceState, forbiddenEvidence);
+
     return {
       workItemId: created.workItemId,
       runId: created.runId,
       missionDigest: created.missionDigest,
-      status: detail.run.status,
+      status: terminalStatus,
       resultSummary: detail.run.resultSummary || null,
-      submittedTurns: Number(querySqlite(join(nodeState, "node.db"),
-        "SELECT COUNT(*) FROM control_turn")),
-      finishedTurns: Number(querySqlite(join(nodeState, "node.db"),
-        "SELECT COUNT(*) FROM control_turn WHERE state='finished'")),
-      wsSessionId: sessionMatch ? sessionMatch[1] : null,
+      submittedTurns,
+      finishedTurns,
+      wsSessionId,
       runtimeEventsBytes: Buffer.byteLength(runtimeEvents),
       runtimeStderrBytes: Buffer.byteLength(stderr),
       observationWindowMs: realWsObservationMs,
+      developmentMode: realWsDevelopmentMode,
       nodeEvidenceDirectory: runDirectory,
-      blocker: detail.run.status === "completed" ? null
-        : "WS did not produce a trusted three-Turn terminal within the bounded observation window",
+      blocker: null,
+      webRenderedBeforeRestart: true,
+      webRenderedAfterRestart: true,
+      serviceRestarted: true,
+      serviceRestarts: 1,
+      serviceEvidenceScanned: true,
+      serviceEvidenceClean: true,
+      proof: {
+        claim: "verified",
+        completedBeforeRestart: terminalStatus,
+        completedAfterRestart: afterRestart.run.status,
+        titleMatchedBeforeRestart: webHtmlBeforeRestart.includes(realWsScenario.title),
+        titleMatchedAfterRestart: webHtmlAfterRestart.includes(realWsScenario.title),
+        completedMarkerBeforeRestart: /已完成/.test(webHtmlBeforeRestart),
+        completedMarkerAfterRestart: /已完成/.test(webHtmlAfterRestart),
+        sameDatabase: toForwardSlashes(serviceDatabase),
+        samePort: port,
+        forbiddenEvidenceScanned: [
+          wsSessionId ? "wsSessionId" : null,
+          "workspacePath",
+          "runtime-events.ndjson",
+          "conversation.ndjson",
+        ].filter(Boolean),
+      },
     };
   } finally {
     await stopChild(node);
@@ -642,13 +748,42 @@ function resolveWsExecutable() {
   return executable;
 }
 
-function resolveRealWsObservationMs() {
-  const value = Number.parseInt(process.env.WORKBENCH_REAL_WS_TIMEOUT_MS || "120000", 10);
+function resolveRealWsObservationMs(developmentMode) {
+  const defaultTimeoutMs = developmentMode ? 1_800_000 : 120_000;
+  const maximumTimeoutMs = developmentMode ? 3_600_000 : 600_000;
+  const value = Number.parseInt(
+    process.env.WORKBENCH_REAL_WS_TIMEOUT_MS || String(defaultTimeoutMs),
+    10,
+  );
   assert.ok(
-    Number.isSafeInteger(value) && value >= 30_000 && value <= 600_000,
-    "WORKBENCH_REAL_WS_TIMEOUT_MS must be an integer from 30000 to 600000",
+    Number.isSafeInteger(value) && value >= 30_000 && value <= maximumTimeoutMs,
+    `WORKBENCH_REAL_WS_TIMEOUT_MS must be an integer from 30000 to ${maximumTimeoutMs}`,
   );
   return value;
+}
+
+function resolveRealWsScenario(developmentMode) {
+  if (!developmentMode) {
+    return {
+      workspace: null,
+      title: "Real WS shipment-count calculation",
+      objective: "Given shipment counts 17, 23, and 40, calculate the item count, total, and arithmetic mean, then verify the arithmetic",
+      acceptanceSummary: "The verified result states count=3, total=80, and arithmetic mean=26.6666666667 (approximately 26.67)",
+      authorizedSideEffectsSummary: "No tools, file changes, network requests, or external side effects",
+    };
+  }
+  const required = (name) => {
+    const value = process.env[name]?.trim();
+    assert.ok(value, `${name} is required for --real-ws-development`);
+    return value;
+  };
+  return {
+    workspace: resolve(required("WORKBENCH_REAL_WS_WORKSPACE")),
+    title: required("WORKBENCH_REAL_WS_TITLE"),
+    objective: required("WORKBENCH_REAL_WS_OBJECTIVE"),
+    acceptanceSummary: required("WORKBENCH_REAL_WS_ACCEPTANCE"),
+    authorizedSideEffectsSummary: required("WORKBENCH_REAL_WS_AUTHORIZED_SIDE_EFFECTS"),
+  };
 }
 
 async function stopChild(child) {

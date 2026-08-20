@@ -91,6 +91,8 @@ class WsRuntimeAdapterTest {
                         "local Workbench task",
                         "Acceptance criteria",
                         "Allowed side effects",
+                        context.workspace().toAbsolutePath().normalize().toString(),
+                        "Use only this directory for all file and shell tools",
                         "Return exactly one JSON object",
                         "SUCCEEDED, FAILED, INTERRUPTED, UNKNOWN",
                         "PASSED, FAILED, UNKNOWN")
@@ -107,6 +109,168 @@ class WsRuntimeAdapterTest {
         {"sessionID":"private-session","type":"session"}
         {"type":"message","part":{"type":"text","text":"looks complete"}}
         """;
+    WsRuntimeAdapter adapter =
+        new WsRuntimeAdapter(
+            "ws", objectMapper, (command, directory) -> new StubProcess(stdout, "", 0));
+    List<NormalizedRuntimeEvent> events = new ArrayList<>();
+
+    adapter.executeTurn(
+        new SessionContext(start(), temporaryDirectory.resolve("workspace"), evidenceDirectory),
+        new TurnInput("turn-3", 3, "finish"),
+        null,
+        events::add);
+
+    assertThat(events.getLast())
+        .isEqualTo(
+            new NormalizedRuntimeEvent.Terminal(
+                DIGEST,
+                NormalizedRuntimeEvent.RuntimeOutcome.UNKNOWN,
+                NormalizedRuntimeEvent.AcceptanceStatus.UNKNOWN,
+                "WS exited without a trusted structured terminal"));
+  }
+
+  @Test
+  void readsStructuredTerminalAfterAssistantSummary() throws Exception {
+    Path evidenceDirectory = createEvidenceDirectory();
+    String terminal =
+        """
+        {"type":"lingfeng.terminal","missionDigest":"%s","runtimeOutcome":"SUCCEEDED",\
+        "acceptanceStatus":"PASSED","resultSummary":"accepted after summary"}
+        """
+            .formatted(DIGEST)
+            .strip();
+    String assistantText = "All acceptance criteria were verified.\n\n" + terminal;
+    String stdout =
+        """
+        {"sessionID":"private-session","type":"session"}
+        {"type":"message","part":{"type":"text","text":%s}}
+        """
+            .formatted(objectMapper.writeValueAsString(assistantText));
+    WsRuntimeAdapter adapter =
+        new WsRuntimeAdapter(
+            "ws", objectMapper, (command, directory) -> new StubProcess(stdout, "", 0));
+    List<NormalizedRuntimeEvent> events = new ArrayList<>();
+
+    adapter.executeTurn(
+        new SessionContext(start(), temporaryDirectory.resolve("workspace"), evidenceDirectory),
+        new TurnInput("turn-3", 3, "finish"),
+        null,
+        events::add);
+
+    assertThat(events)
+        .contains(
+            new NormalizedRuntimeEvent.Terminal(
+                DIGEST,
+                NormalizedRuntimeEvent.RuntimeOutcome.SUCCEEDED,
+                NormalizedRuntimeEvent.AcceptanceStatus.PASSED,
+                "accepted after summary"))
+        .doesNotContain(
+            new NormalizedRuntimeEvent.Terminal(
+                DIGEST,
+                NormalizedRuntimeEvent.RuntimeOutcome.UNKNOWN,
+                NormalizedRuntimeEvent.AcceptanceStatus.UNKNOWN,
+                "WS exited without a trusted structured terminal"));
+  }
+
+  @Test
+  void rejectsWrongDigestTerminalAfterAssistantSummary() throws Exception {
+    Path evidenceDirectory = createEvidenceDirectory();
+    String wrongDigest = "b".repeat(64);
+    String terminal =
+        """
+        {"type":"lingfeng.terminal","missionDigest":"%s","runtimeOutcome":"SUCCEEDED",\
+        "acceptanceStatus":"PASSED","resultSummary":"wrong digest"}
+        """
+            .formatted(wrongDigest)
+            .strip();
+    String assistantText = "All acceptance criteria were verified.\n\n" + terminal;
+    String stdout =
+        """
+        {"sessionID":"private-session","type":"session"}
+        {"type":"message","part":{"type":"text","text":%s}}
+        """
+            .formatted(objectMapper.writeValueAsString(assistantText));
+    WsRuntimeAdapter adapter =
+        new WsRuntimeAdapter(
+            "ws", objectMapper, (command, directory) -> new StubProcess(stdout, "", 0));
+    List<NormalizedRuntimeEvent> events = new ArrayList<>();
+
+    adapter.executeTurn(
+        new SessionContext(start(), temporaryDirectory.resolve("workspace"), evidenceDirectory),
+        new TurnInput("turn-3", 3, "finish"),
+        null,
+        events::add);
+
+    assertThat(events.getLast())
+        .isEqualTo(
+            new NormalizedRuntimeEvent.Terminal(
+                wrongDigest,
+                NormalizedRuntimeEvent.RuntimeOutcome.UNKNOWN,
+                NormalizedRuntimeEvent.AcceptanceStatus.UNKNOWN,
+                "Runtime terminal mission digest did not match"));
+    assertThat(events)
+        .doesNotContain(
+            new NormalizedRuntimeEvent.Terminal(
+                DIGEST,
+                NormalizedRuntimeEvent.RuntimeOutcome.UNKNOWN,
+                NormalizedRuntimeEvent.AcceptanceStatus.UNKNOWN,
+                "WS exited without a trusted structured terminal"));
+  }
+
+  @Test
+  void rejectsInvalidStatusTerminalAfterAssistantSummary() throws Exception {
+    Path evidenceDirectory = createEvidenceDirectory();
+    String terminal =
+        """
+        {"type":"lingfeng.terminal","missionDigest":"%s","runtimeOutcome":"BOGUS",\
+        "acceptanceStatus":"PASSED","resultSummary":"bad status"}
+        """
+            .formatted(DIGEST)
+            .strip();
+    String assistantText = "All acceptance criteria were verified.\n\n" + terminal;
+    String stdout =
+        """
+        {"sessionID":"private-session","type":"session"}
+        {"type":"message","part":{"type":"text","text":%s}}
+        """
+            .formatted(objectMapper.writeValueAsString(assistantText));
+    WsRuntimeAdapter adapter =
+        new WsRuntimeAdapter(
+            "ws", objectMapper, (command, directory) -> new StubProcess(stdout, "", 0));
+    List<NormalizedRuntimeEvent> events = new ArrayList<>();
+
+    adapter.executeTurn(
+        new SessionContext(start(), temporaryDirectory.resolve("workspace"), evidenceDirectory),
+        new TurnInput("turn-3", 3, "finish"),
+        null,
+        events::add);
+
+    assertThat(events.getLast())
+        .isEqualTo(
+            new NormalizedRuntimeEvent.Terminal(
+                DIGEST,
+                NormalizedRuntimeEvent.RuntimeOutcome.UNKNOWN,
+                NormalizedRuntimeEvent.AcceptanceStatus.UNKNOWN,
+                "Runtime terminal contains unsupported status"));
+    assertThat(events)
+        .doesNotContain(
+            new NormalizedRuntimeEvent.Terminal(
+                DIGEST,
+                NormalizedRuntimeEvent.RuntimeOutcome.UNKNOWN,
+                NormalizedRuntimeEvent.AcceptanceStatus.UNKNOWN,
+                "WS exited without a trusted structured terminal"));
+  }
+
+  @Test
+  void rejectsMalformedTerminalAfterAssistantSummary() throws Exception {
+    Path evidenceDirectory = createEvidenceDirectory();
+    String assistantText = "All acceptance criteria were verified.\n\n{not valid json}";
+    String stdout =
+        """
+        {"sessionID":"private-session","type":"session"}
+        {"type":"message","part":{"type":"text","text":%s}}
+        """
+            .formatted(objectMapper.writeValueAsString(assistantText));
     WsRuntimeAdapter adapter =
         new WsRuntimeAdapter(
             "ws", objectMapper, (command, directory) -> new StubProcess(stdout, "", 0));

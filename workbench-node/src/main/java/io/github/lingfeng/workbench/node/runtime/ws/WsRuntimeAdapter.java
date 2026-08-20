@@ -84,7 +84,7 @@ public final class WsRuntimeAdapter {
       processCommand.add("--session");
       processCommand.add(runtimeSessionId);
     }
-    processCommand.add(prompt(command, turn));
+    processCommand.add(prompt(command, turn, context.workspace()));
     return execute(
         List.copyOf(processCommand), context, turn, runtimeSessionId, eventSink);
   }
@@ -241,9 +241,26 @@ public final class WsRuntimeAdapter {
   private NormalizedRuntimeEvent.Terminal interpretEmbeddedTerminal(
       String text, String expectedMissionDigest) {
     JsonNode decoded = decode(text.strip());
-    return decoded == null
-        ? null
-        : WsTerminalInterpreter.interpret(decoded, expectedMissionDigest);
+    NormalizedRuntimeEvent.Terminal terminal =
+        decoded == null
+            ? null
+            : WsTerminalInterpreter.interpret(decoded, expectedMissionDigest);
+    if (terminal != null) {
+      return terminal;
+    }
+    int objectStart = text.indexOf('{');
+    while (objectStart >= 0) {
+      decoded = decode(text.substring(objectStart));
+      terminal =
+          decoded == null
+              ? null
+              : WsTerminalInterpreter.interpret(decoded, expectedMissionDigest);
+      if (terminal != null) {
+        return terminal;
+      }
+      objectStart = text.indexOf('{', objectStart + 1);
+    }
+    return null;
   }
 
   private static void appendTurnResult(Path resultPath, TurnInput turn, List<String> turnText)
@@ -271,14 +288,16 @@ public final class WsRuntimeAdapter {
     }
   }
 
-  private static String prompt(NodeCommand.StartRun command, TurnInput turn) {
+  private static String prompt(NodeCommand.StartRun command, TurnInput turn, Path workspace) {
     String taskContext =
         ("You are completing a local Workbench task. Task: %s Acceptance criteria: %s "
-                + "Allowed side effects: %s Task reference digest: %s ")
+                + "Allowed side effects: %s Local workspace: %s Use only this directory for all file and shell tools. "
+                + "Task reference digest: %s ")
             .formatted(
                 command.objective(),
                 command.acceptanceSummary(),
                 command.authorizedSideEffectsSummary(),
+                workspace.toAbsolutePath().normalize(),
                 command.binding().missionDigest());
     if (turn.turnNumber() < FINAL_TURN) {
       return (taskContext

@@ -27,18 +27,20 @@ last_verified: 2026-08-20
 - v2-only Service、Node、Web、合同和 fake E2E 已通过；
 - WS `0.0.0--202608171122` 的直接 `run` smoke 已返回结构化事件和真实 Session；Node/Service 真实控制环 Run `run_339aaccefe294a59bb6983e254843634` 已在唯一 Session `ses_fe27959baffe0jHllmrR2WwEc0` 完成 3/3 Turn 和可信 `SUCCEEDED/PASSED` terminal；
 - 最终适配后另有成功 Run `run_66ad1083a274422d8fa3cacd8849368b` 与 `run_14d0fc03221a4086b5fbf9ca098f2887`。R1 当前为连续成功 Run 3 个、固定样本类型 1/3；
+- 真实开发链路已完成一个完整 green Run：`run_8de0fc38500a48bba303823bd56f7254` 在唯一 Session `ses_fe2162583ffeFqjuc64UZdkvut` 中由 WS 修改、测试并推送 `2a8d23b`；Service/Web 同库重启持久化和 Service 敏感证据扫描通过；
+- `delegate-to-ws`/Bridge 已明确废弃为执行路径；当前唯一目标路径是 Service 创建 WorkItem、Node 出站 poll 并直接启动本机 WS；
 - `ws providers list` 的 0 credential 与 `ws models` 的空输出不是本机默认 agent/model 可用性的可靠判据，真实 `run` smoke 才是执行 Gate；
 - 真实 Interaction、checkpoint/resume、Service/Node 故障注入、服务器 v0.3 部署、Node v0.3 安装和 Sites 新版本均未验证或未授权；
 - 旧 Python、旧 D1 和当前安装版 v0.2 Node 继续受独立清理 Gate 保护。
 
-本轮曾保留三类真实失败证据：WS 瞬时 `no providers found`、合成 Mission 文案被拒绝、自然状态 `completed/passed` 被协议 fail closed。stdin EOF、terminal 顺序、自然任务提示和允许枚举均已针对性修复；不能删除这些失败证据或只记录成功样本。
+除早期 `no providers found`、合成 Mission 文案和自然状态枚举失败外，本轮真实开发还保留了 workspace 工具 cwd 回落、开发观察窗到期、以及 WS 输出“验收摘要 + terminal JSON”导致 uncertain 的证据。workspace 绑定、有界 30/60 分钟开发窗口和 embedded terminal 解析均已针对性修复；不能删除失败证据或只记录最终成功样本。
 
 ## 3. 固定护栏
 
 - 单 Node、单并发 Run；同一时刻只允许一个真实 WS 子进程；
 - 初始任务只使用临时隔离 workspace，禁止生产仓库、生产系统写入和外部消息；
-- 前两阶段禁止文件工具、shell、浏览器、网络写入和第三方 API；
-- 每个 Mission 有明确输入、三 Turn 上限、10 分钟总超时和人工停止点；
+- R0/R1 无工具 canary 继续禁止文件工具、shell、浏览器和网络写入；真实开发 Gate 只允许 Mission 明列的仓库、文件、测试和 Git 分支，禁止第三方 API、部署和生产写入；
+- 每个 Mission 有明确输入、三 Turn 上限和人工停止点；无工具 canary 最多 10 分钟，真实开发默认 30 分钟且硬上限 60 分钟；
 - WS credential 只存在于本机官方凭证存储，Service、Git、日志和证据目录不得出现密钥；
 - Hermes 继续使用本地受控边界，真实微信必须单独授权测试账号和收件人；
 - Service 永不回连 Node；Node 保持只出站 HTTPS；完整会话和原始证据只留 Node；
@@ -93,6 +95,21 @@ last_verified: 2026-08-20
 
 Node 重启后的真实 Session 恢复只有在 WS 明确提供 durable resume capability 时才测试；否则必须保持 fail closed，并把该场景标为不支持，而不是降级成新 Session。
 
+### R1D：小型真实开发 canary（进行中）
+
+R1D 不再使用合成计算题，而是让 WS 在授权仓库内完成可审查的小型代码任务。当前已有 1 个完整 green Run，另外 2 个开发 Run 虽创建并推送了提交，但分别因观察窗和终态适配进入 running/uncertain，只作为故障证据，不计入连续成功数。
+
+每个 R1D Mission 必须满足：
+
+- 由 Service 创建并投递，Node 直接启动 WS；不得从 Codex/Bridge 旁路执行；
+- 单仓库、单分支，最多 3 个源文件；授权文件、测试命令、commit message 和允许的远端分支在 Mission 中明确；
+- 不预置最终实现 diff；WS 必须自行诊断、实现、测试并说明验收证据；
+- 允许 Git commit/push 只限本 Mission 分支；merge 仍由独立审查和完整回归完成，WS 不得自行 merge；
+- 每轮仍要求唯一 Session、3/3 Turn、可信 digest terminal、完整 Node evidence、Service/Web 最小投影、Service 重启持久化和敏感证据扫描；
+- 任一越界工具路径、额外文件修改、测试失败、UNKNOWN 或无法客观证明的 terminal 立即停止，不用人工改状态补成功。
+
+达到连续 3 个完整 green R1D Run 后，才进入真实 WS 的单变量 Service 中断；Node 重启、Interaction、真实消息和部署仍保留独立 Gate。
+
 ### R3：受控 Interaction
 
 前置：WS 明确支持可控 Interaction 和同 Session resume；若能力探测不支持，本阶段不执行。
@@ -109,7 +126,7 @@ Node 重启后的真实 Session 恢复只有在 WS 明确提供 durable resume c
 
 ### R4：低频日常 canary
 
-仅在 R1-R3 连续通过后启用。初始一周限制为：
+仅在 R1D 连续 3 个 green Run，且适用的 R2/R3 Gate 通过或明确标为不支持后启用。初始一周限制为：
 
 - 每天最多 1 个 Run；
 - 仅白天人工在场时启动；
@@ -154,15 +171,14 @@ Service/Web 最终投影
 
 回退动作限于停止本轮临时进程、禁用本轮 credential/config、保留 SQLite/WAL/日志并回到最后一个 fake E2E 通过的构建。不得 reset、清理证据、删除旧资产或用人工 SQL 修改状态。
 
-## 7. 下一轮：R1 收口
+## 7. 下一轮：R1D 低频投入使用
 
-下一轮不扩大副作用边界，只完成 R1：
+下一轮仍只在本地原始工作区运行，不扩大到部署、安装、生产系统或真实消息：
 
-1. 用“给定短文本整理三条验收项”完成一个真实 3 Turn Run；
-2. 用“根据给定约束生成不超过五项的执行清单”完成一个真实 3 Turn Run；
-3. 每个 Run 都核对唯一 Session、`submittedTurns=3`、`finishedTurns=3`、digest、`SUCCEEDED/PASSED`、本地 evidence 完整性和 stderr；
-4. 对两个 Run 均读取 Service 最小投影并使用 Web production Worker 渲染；至少对最后一个 Run 使用同一 SQLite 重启 Service 后再次查询和渲染，确认 completed 投影持久化；
-5. 扫描 Service SQLite/WAL 与 Web 输出，拒绝 Session ID、workspace 路径、原始对话、runtime events 或凭证泄漏；
-6. 保留所有成功和失败目录，把两个新样本接入当前连续成功序列。如果任一 Run 进入 UNKNOWN、Session 漂移、terminal 不可信或 evidence 不完整，立即停止 R1 扩量并回到单样本定位。
+1. **Canary A：Node 停机竞态诊断。** 以本轮独立回归偶发出现、但未导致测试失败的 `RejectedExecutionException` 为真实缺陷候选，让 WS 从干净 HEAD 自行诊断 `ServiceConnectionLoopTest`/fake Runtime teardown 竞态；不预置实现 diff，最多修改 3 个 Node 文件。只有能稳定复现并用测试证明修复时才允许 commit/push；无法复现则以“未修改 + 诊断证据”结束，不硬造提交。
+2. **Canary B：小型可观测性改进。** 在 Canary A green 后，让 WS 为真实开发 summary 增加每个 Turn 的 submitted/finished 时间或终态来源分类；最多修改 integration harness 和 1 个 Node 文件，不改变跨模块合同。要求先写失败测试/断言，再实现、跑完整 fake E2E、commit/push。
+3. 两个 Run 都必须独立核对唯一 Session、3/3 Turn、digest、`SUCCEEDED/PASSED`、远端 exact SHA、Node evidence 和 stderr；production Web Worker 在 Service 重启前后渲染同一 completed WorkItem，并扫描 Service SQLite/WAL。
+4. 每次只运行一个真实 WS；前一个 Run 的审查、完整回归和人工 merge 完成后才启动下一个。任一 UNKNOWN、Session 漂移、工具越界、额外文件、无法复现却声称修复或证据不完整，立即停止扩量。
+5. 两个新 Run 都 green 后，R1D 达到连续 3 个完整闭环。下一份执行单才允许在一个只读验证任务的 Turn 2 期间仅中断 Service，验证真实 WS 在 Node 内继续、outbox 重放以及 Service/Web 收敛；不同时注入 Node 重启。
 
-R1 全部通过后只提交 R2 的单变量故障注入执行单，不自动开始 R2。建议的首个 R2 canary 是 Turn 2 期间仅中断 Service，验证真实 WS Session 在 Node 内继续、outbox 重放后 Service/Web 收敛；Node 重启、Interaction、真实 Hermes/微信、文件工具、部署和安装继续分别等待新的 Gate。
+真实 Interaction、Node 跨进程 Session 恢复、真实 Hermes/微信、服务器部署、Node 安装、Sites 发布、旧 Python/旧 D1 删除仍分别等待新的 Gate。
