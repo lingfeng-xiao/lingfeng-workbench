@@ -40,7 +40,7 @@ const tls = await createLocalTls(evidenceRoot);
 const realWsDevelopmentMode = process.argv.includes("--real-ws-development");
 const realWsMode = realWsDevelopmentMode || process.argv.includes("--real-ws");
 const realWsExecutable = realWsMode ? resolveWsExecutable() : null;
-const realWsObservationMs = realWsMode ? resolveRealWsObservationMs() : null;
+const realWsObservationMs = realWsMode ? resolveRealWsObservationMs(realWsDevelopmentMode) : null;
 const realWsScenario = realWsMode ? resolveRealWsScenario(realWsDevelopmentMode) : null;
 if (realWsDevelopmentMode) {
   await access(realWsScenario.workspace);
@@ -748,11 +748,16 @@ function resolveWsExecutable() {
   return executable;
 }
 
-function resolveRealWsObservationMs() {
-  const value = Number.parseInt(process.env.WORKBENCH_REAL_WS_TIMEOUT_MS || "120000", 10);
+function resolveRealWsObservationMs(developmentMode) {
+  const defaultTimeoutMs = developmentMode ? 1_800_000 : 120_000;
+  const maximumTimeoutMs = developmentMode ? 3_600_000 : 600_000;
+  const value = Number.parseInt(
+    process.env.WORKBENCH_REAL_WS_TIMEOUT_MS || String(defaultTimeoutMs),
+    10,
+  );
   assert.ok(
-    Number.isSafeInteger(value) && value >= 30_000 && value <= 600_000,
-    "WORKBENCH_REAL_WS_TIMEOUT_MS must be an integer from 30000 to 600000",
+    Number.isSafeInteger(value) && value >= 30_000 && value <= maximumTimeoutMs,
+    `WORKBENCH_REAL_WS_TIMEOUT_MS must be an integer from 30000 to ${maximumTimeoutMs}`,
   );
   return value;
 }
