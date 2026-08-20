@@ -84,7 +84,7 @@ public final class WsRuntimeAdapter {
       processCommand.add("--session");
       processCommand.add(runtimeSessionId);
     }
-    processCommand.add(prompt(command, turn));
+    processCommand.add(prompt(command, turn, context.workspace()));
     return execute(
         List.copyOf(processCommand), context, turn, runtimeSessionId, eventSink);
   }
@@ -271,14 +271,16 @@ public final class WsRuntimeAdapter {
     }
   }
 
-  private static String prompt(NodeCommand.StartRun command, TurnInput turn) {
+  private static String prompt(NodeCommand.StartRun command, TurnInput turn, Path workspace) {
     String taskContext =
         ("You are completing a local Workbench task. Task: %s Acceptance criteria: %s "
-                + "Allowed side effects: %s Task reference digest: %s ")
+                + "Allowed side effects: %s Local workspace: %s Use only this directory for all file and shell tools. "
+                + "Task reference digest: %s ")
             .formatted(
                 command.objective(),
                 command.acceptanceSummary(),
                 command.authorizedSideEffectsSummary(),
+                workspace.toAbsolutePath().normalize(),
                 command.binding().missionDigest());
     if (turn.turnNumber() < FINAL_TURN) {
       return (taskContext

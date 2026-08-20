@@ -91,6 +91,8 @@ class WsRuntimeAdapterTest {
                         "local Workbench task",
                         "Acceptance criteria",
                         "Allowed side effects",
+                        context.workspace().toAbsolutePath().normalize().toString(),
+                        "Use only this directory for all file and shell tools",
                         "Return exactly one JSON object",
                         "SUCCEEDED, FAILED, INTERRUPTED, UNKNOWN",
                         "PASSED, FAILED, UNKNOWN")
