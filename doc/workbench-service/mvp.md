@@ -1,13 +1,15 @@
 ---
-status: authoritative
+status: frozen-superseded
 authority: main
 source_ref: service-mvp-s1
 owner: workbench-service
-superseded_by: null
+superseded_by: detailed-design.md
 last_verified: 2026-08-19
 ---
 
 # MVP-S1
+
+> 状态说明：本文保留 v0.2/S1 范围和验收事实，不作为 v0.3 新实现输入；目标范围见 `detailed-design.md` 和开发计划。
 
 ## 包含
 

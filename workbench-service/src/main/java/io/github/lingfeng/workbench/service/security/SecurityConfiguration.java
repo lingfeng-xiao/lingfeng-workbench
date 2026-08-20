@@ -14,24 +14,43 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 @Configuration
 class SecurityConfiguration {
 
-    @Bean
-    SecurityFilterChain securityFilterChain(
-            HttpSecurity http, BearerAuthenticationFilter bearerFilter, ObjectMapper objectMapper) throws Exception {
-        return http
-                .csrf(csrf -> csrf.disable())
-                .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-                .authorizeHttpRequests(authorize -> authorize
-                        .requestMatchers(HttpMethod.POST, "/api/client/v1/work-items").hasAuthority("CLIENT_CREATE")
-                        .requestMatchers("/api/client/v1/**").hasAuthority("CLIENT_READ")
-                        .requestMatchers("/api/node/v1/**").hasAuthority("NODE")
-                        .anyRequest().denyAll())
-                .exceptionHandling(errors -> errors.accessDeniedHandler((request, response, exception) -> {
-                    response.setStatus(HttpServletResponse.SC_FORBIDDEN);
-                    response.setContentType("application/json");
-                    objectMapper.writeValue(response.getOutputStream(),
-                            ApiErrors.forRequest(request, "forbidden", "Credential lacks the required scope"));
-                }))
-                .addFilterBefore(bearerFilter, UsernamePasswordAuthenticationFilter.class)
-                .build();
-    }
+  @Bean
+  SecurityFilterChain securityFilterChain(
+      HttpSecurity http, BearerAuthenticationFilter bearerFilter, ObjectMapper objectMapper)
+      throws Exception {
+    return http.csrf(csrf -> csrf.disable())
+        .sessionManagement(
+            session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+        .authorizeHttpRequests(
+            authorize ->
+                authorize
+                    .requestMatchers(HttpMethod.POST, "/api/client/v2/work-items")
+                    .hasAuthority("V2_CREATE")
+                    .requestMatchers(HttpMethod.POST, "/api/client/v2/interactions/*/resolution")
+                    .hasAuthority("INTERACTION_RESOLVE")
+                    .requestMatchers(HttpMethod.POST, "/api/client/v2/notifications/poll")
+                    .hasAuthority("NOTIFICATION_PULL")
+                    .requestMatchers(
+                        HttpMethod.POST, "/api/client/v2/notifications/*/delivery-events")
+                    .hasAuthority("NOTIFICATION_REPORT")
+                    .requestMatchers(HttpMethod.GET, "/api/client/v2/**")
+                    .hasAuthority("CLIENT_READ")
+                    .requestMatchers("/api/node/v2/**")
+                    .hasAuthority("NODE")
+                    .anyRequest()
+                    .denyAll())
+        .exceptionHandling(
+            errors ->
+                errors.accessDeniedHandler(
+                    (request, response, exception) -> {
+                      response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+                      response.setContentType("application/json");
+                      objectMapper.writeValue(
+                          response.getOutputStream(),
+                          ApiErrors.forRequest(
+                              request, "forbidden", "Credential lacks the required scope"));
+                    }))
+        .addFilterBefore(bearerFilter, UsernamePasswordAuthenticationFilter.class)
+        .build();
+  }
 }

@@ -1,0 +1,308 @@
+openapi: 3.1.0
+info:
+  title: lingfeng-workbench Node Protocol v2
+  version: 2.0.0
+  description: Strict outbound-HTTPS control loop independently implemented by Service and Node.
+  license: { name: Proprietary, identifier: LicenseRef-Proprietary }
+servers:
+  - url: /api/node/v2
+security:
+  - bearerAuth: []
+paths:
+  /hello:
+    post:
+      operationId: registerNodeV2
+      summary: Register or refresh the authenticated Node projection
+      x-required-scope: node-bound
+      requestBody: { required: true, x-max-body-bytes: 65536, content: { application/json: { schema: { $ref: '#/components/schemas/HelloRequest' } } } }
+      responses:
+        '200': { description: Registered, content: { application/json: { schema: { $ref: '#/components/schemas/Acknowledgement' } } } }
+        '400': { $ref: '#/components/responses/Rejected' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+  /heartbeat:
+    post:
+      operationId: heartbeatNodeV2
+      summary: Refresh Node liveness without changing Run outcome
+      x-required-scope: node-bound
+      requestBody: { required: true, x-max-body-bytes: 65536, content: { application/json: { schema: { $ref: '#/components/schemas/HeartbeatRequest' } } } }
+      responses:
+        '200': { description: Accepted, content: { application/json: { schema: { $ref: '#/components/schemas/Acknowledgement' } } } }
+        '400': { $ref: '#/components/responses/Rejected' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+  /poll:
+    post:
+      operationId: pollNodeCommandV2
+      summary: Pull at most one durable command; unacknowledged commands are redelivered
+      x-required-scope: node-bound
+      requestBody: { required: true, x-max-body-bytes: 65536, content: { application/json: { schema: { $ref: '#/components/schemas/PollRequest' } } } }
+      responses:
+        '200':
+          description: At most one command
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: '#/components/schemas/NoCommand' }
+                  - { $ref: '#/components/schemas/StartRunCommand' }
+                  - { $ref: '#/components/schemas/ProvideInteractionResponseCommand' }
+                  - { $ref: '#/components/schemas/CancelRunCommand' }
+        '400': { $ref: '#/components/responses/Rejected' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+  /events:
+    post:
+      operationId: recordNodeEventV2
+      summary: Record one durable idempotent normalized control event
+      x-required-scope: node-bound
+      requestBody:
+        required: true
+        x-max-body-bytes: 65536
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - { $ref: '#/components/schemas/CommandStoredEvent' }
+                - { $ref: '#/components/schemas/RunStartedEvent' }
+                - { $ref: '#/components/schemas/PhaseChangedEvent' }
+                - { $ref: '#/components/schemas/ProgressUpdatedEvent' }
+                - { $ref: '#/components/schemas/InteractionRequestedEvent' }
+                - { $ref: '#/components/schemas/InteractionResponseConsumedEvent' }
+                - { $ref: '#/components/schemas/RunTerminalEvent' }
+      responses:
+        '200': { description: Accepted or idempotently replayed, content: { application/json: { schema: { $ref: '#/components/schemas/Acknowledgement' } } } }
+        '400': { $ref: '#/components/responses/Rejected' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer }
+  responses:
+    Rejected: { description: Malformed or unsupported message, content: { application/json: { schema: { $ref: '#/components/schemas/ProtocolError' } } } }
+    Unauthorized: { description: Invalid Node credential, content: { application/json: { schema: { $ref: '#/components/schemas/ProtocolError' } } } }
+    Forbidden: { description: Credential is not bound to the claimed Node, content: { application/json: { schema: { $ref: '#/components/schemas/ProtocolError' } } } }
+    Conflict: { description: 'Message ID, binding, digest, checkpoint, Node, or state conflicts with durable state', content: { application/json: { schema: { $ref: '#/components/schemas/ProtocolError' } } } }
+    PayloadTooLarge: { description: Encoded message exceeds 64 KiB, content: { application/json: { schema: { $ref: '#/components/schemas/ProtocolError' } } } }
+  schemas:
+    Identifier: { type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' }
+    WorkItemId: { type: string, pattern: '^wi_[A-Za-z0-9]+$' }
+    MissionId: { type: string, pattern: '^mi_[A-Za-z0-9]+$' }
+    RunId: { type: string, pattern: '^run_[A-Za-z0-9]+$' }
+    InteractionId: { type: string, pattern: '^int_[A-Za-z0-9]+$' }
+    Digest: { type: string, pattern: '^[a-f0-9]{64}$' }
+    Timestamp: { type: string, format: date-time }
+    ShortText: { type: string, minLength: 1, maxLength: 800 }
+    Decision: { type: string, enum: [APPROVE, REJECT, PROVIDE_INPUT] }
+    ProtocolHeader:
+      type: object
+      required: [protocolVersion, messageId, nodeId, sentAt]
+      properties:
+        protocolVersion: { type: string, const: '2.0' }
+        messageId: { $ref: '#/components/schemas/Identifier' }
+        nodeId: { $ref: '#/components/schemas/Identifier' }
+        sentAt: { $ref: '#/components/schemas/Timestamp' }
+    RunBinding:
+      type: object
+      required: [workItemId, missionId, runId, missionDigest]
+      properties:
+        workItemId: { $ref: '#/components/schemas/WorkItemId' }
+        missionId: { $ref: '#/components/schemas/MissionId' }
+        runId: { $ref: '#/components/schemas/RunId' }
+        missionDigest: { $ref: '#/components/schemas/Digest' }
+    HelloRequest:
+      type: object
+      allOf:
+        - { $ref: '#/components/schemas/ProtocolHeader' }
+        - type: object
+          required: [displayName, capabilities]
+          properties:
+            displayName: { $ref: '#/components/schemas/ShortText' }
+            capabilities: { type: array, maxItems: 32, uniqueItems: true, items: { $ref: '#/components/schemas/Identifier' } }
+      unevaluatedProperties: false
+    HeartbeatRequest:
+      type: object
+      allOf:
+        - { $ref: '#/components/schemas/ProtocolHeader' }
+        - type: object
+          properties:
+            activeRunId: { $ref: '#/components/schemas/RunId' }
+            activeRunState: { type: string, enum: [received, preparing, opening_session, running, waiting_interaction, resuming, cancelling] }
+      unevaluatedProperties: false
+    PollRequest:
+      type: object
+      allOf:
+        - { $ref: '#/components/schemas/ProtocolHeader' }
+        - type: object
+          properties: { maxCommands: { type: integer, const: 1, default: 1 } }
+      unevaluatedProperties: false
+    NoCommand:
+      type: object
+      additionalProperties: false
+      required: [commandAvailable]
+      properties: { commandAvailable: { type: boolean, const: false } }
+    CommandHeader:
+      type: object
+      allOf:
+        - { $ref: '#/components/schemas/ProtocolHeader' }
+        - { $ref: '#/components/schemas/RunBinding' }
+        - type: object
+          required: [commandAvailable, commandType, commandId, targetNodeId]
+          properties:
+            commandAvailable: { type: boolean, const: true }
+            commandType: { type: string, enum: [START_RUN, PROVIDE_INTERACTION_RESPONSE, CANCEL_RUN] }
+            commandId: { $ref: '#/components/schemas/Identifier' }
+            targetNodeId: { $ref: '#/components/schemas/Identifier' }
+    StartRunCommand:
+      type: object
+      allOf:
+        - { $ref: '#/components/schemas/CommandHeader' }
+        - type: object
+          required: [missionRevision, objective, acceptanceSummary, authorizedSideEffectsSummary, workspaceRef, runtimeKind, executionProfile]
+          properties:
+            commandType: { type: string, const: START_RUN }
+            missionRevision: { type: integer, minimum: 1 }
+            objective: { $ref: '#/components/schemas/ShortText' }
+            acceptanceSummary: { $ref: '#/components/schemas/ShortText' }
+            authorizedSideEffectsSummary: { $ref: '#/components/schemas/ShortText' }
+            workspaceRef: { $ref: '#/components/schemas/Identifier' }
+            runtimeKind: { $ref: '#/components/schemas/Identifier' }
+            executionProfile: { $ref: '#/components/schemas/Identifier' }
+      unevaluatedProperties: false
+    ProvideInteractionResponseCommand:
+      type: object
+      allOf:
+        - { $ref: '#/components/schemas/CommandHeader' }
+        - type: object
+          required: [interactionId, checkpointId, decision, responseSummary, resolvedAt]
+          properties:
+            commandType: { type: string, const: PROVIDE_INTERACTION_RESPONSE }
+            interactionId: { $ref: '#/components/schemas/InteractionId' }
+            checkpointId: { $ref: '#/components/schemas/Identifier' }
+            decision: { $ref: '#/components/schemas/Decision' }
+            responseSummary: { $ref: '#/components/schemas/ShortText' }
+            resolvedAt: { $ref: '#/components/schemas/Timestamp' }
+      unevaluatedProperties: false
+    CancelRunCommand:
+      type: object
+      allOf:
+        - { $ref: '#/components/schemas/CommandHeader' }
+        - type: object
+          required: [reasonSummary]
+          properties:
+            commandType: { type: string, const: CANCEL_RUN }
+            reasonSummary: { $ref: '#/components/schemas/ShortText' }
+      unevaluatedProperties: false
+    EventHeader:
+      type: object
+      allOf:
+        - { $ref: '#/components/schemas/ProtocolHeader' }
+        - { $ref: '#/components/schemas/RunBinding' }
+        - type: object
+          required: [eventType, localSequence]
+          properties:
+            eventType: { type: string, enum: [COMMAND_STORED, RUN_STARTED, PHASE_CHANGED, PROGRESS_UPDATED, INTERACTION_REQUESTED, INTERACTION_RESPONSE_CONSUMED, RUN_TERMINAL] }
+            localSequence: { type: integer, minimum: 1 }
+    CommandStoredEvent:
+      type: object
+      allOf:
+        - { $ref: '#/components/schemas/EventHeader' }
+        - type: object
+          required: [commandId, commandPayloadDigest]
+          properties:
+            eventType: { type: string, const: COMMAND_STORED }
+            commandId: { $ref: '#/components/schemas/Identifier' }
+            commandPayloadDigest: { $ref: '#/components/schemas/Digest' }
+      unevaluatedProperties: false
+    RunStartedEvent:
+      type: object
+      allOf:
+        - { $ref: '#/components/schemas/EventHeader' }
+        - type: object
+          required: [resumable]
+          properties:
+            eventType: { type: string, const: RUN_STARTED }
+            resumable: { type: boolean }
+      unevaluatedProperties: false
+    PhaseChangedEvent:
+      type: object
+      allOf:
+        - { $ref: '#/components/schemas/EventHeader' }
+        - type: object
+          required: [phaseCode, phaseSummary]
+          properties:
+            eventType: { type: string, const: PHASE_CHANGED }
+            phaseCode: { type: string, enum: [CONTRACT_REVIEW, CONTEXT_FREEZE, IMPLEMENTATION, BUILD_VALIDATION, API_VALIDATION, REPORTING] }
+            phaseSummary: { $ref: '#/components/schemas/ShortText' }
+      unevaluatedProperties: false
+    ProgressUpdatedEvent:
+      type: object
+      allOf:
+        - { $ref: '#/components/schemas/EventHeader' }
+        - type: object
+          required: [progressSummary]
+          properties:
+            eventType: { type: string, const: PROGRESS_UPDATED }
+            progressSummary: { $ref: '#/components/schemas/ShortText' }
+      unevaluatedProperties: false
+    InteractionRequestedEvent:
+      type: object
+      allOf:
+        - { $ref: '#/components/schemas/EventHeader' }
+        - type: object
+          required: [interactionId, checkpointId, targetNodeId, promptSummary, allowedDecisions, resumable]
+          properties:
+            eventType: { type: string, const: INTERACTION_REQUESTED }
+            interactionId: { $ref: '#/components/schemas/InteractionId' }
+            checkpointId: { $ref: '#/components/schemas/Identifier' }
+            targetNodeId: { $ref: '#/components/schemas/Identifier' }
+            promptSummary: { $ref: '#/components/schemas/ShortText' }
+            allowedDecisions: { type: array, minItems: 1, maxItems: 3, uniqueItems: true, items: { $ref: '#/components/schemas/Decision' } }
+            resumable: { type: boolean, const: true }
+      unevaluatedProperties: false
+    InteractionResponseConsumedEvent:
+      type: object
+      allOf:
+        - { $ref: '#/components/schemas/EventHeader' }
+        - type: object
+          required: [interactionId, checkpointId, targetNodeId, responseCommandId]
+          properties:
+            eventType: { type: string, const: INTERACTION_RESPONSE_CONSUMED }
+            interactionId: { $ref: '#/components/schemas/InteractionId' }
+            checkpointId: { $ref: '#/components/schemas/Identifier' }
+            targetNodeId: { $ref: '#/components/schemas/Identifier' }
+            responseCommandId: { $ref: '#/components/schemas/Identifier' }
+      unevaluatedProperties: false
+    RunTerminalEvent:
+      type: object
+      allOf:
+        - { $ref: '#/components/schemas/EventHeader' }
+        - type: object
+          required: [runtimeOutcome, acceptanceStatus, resultSummary, resumable]
+          properties:
+            eventType: { type: string, const: RUN_TERMINAL }
+            runtimeOutcome: { type: string, enum: [SUCCEEDED, FAILED, INTERRUPTED, UNKNOWN] }
+            acceptanceStatus: { type: string, enum: [PASSED, FAILED, UNKNOWN] }
+            resultSummary: { $ref: '#/components/schemas/ShortText' }
+            resumable: { type: boolean, const: false }
+      unevaluatedProperties: false
+    Acknowledgement:
+      type: object
+      additionalProperties: false
+      required: [requestMessageId, duplicate]
+      properties:
+        requestMessageId: { $ref: '#/components/schemas/Identifier' }
+        duplicate: { type: boolean }
+    ProtocolError:
+      type: object
+      additionalProperties: false
+      required: [code, message, requestMessageId]
+      properties:
+        code: { $ref: '#/components/schemas/Identifier' }
+        message: { $ref: '#/components/schemas/ShortText' }
+        requestMessageId: { $ref: '#/components/schemas/Identifier' }

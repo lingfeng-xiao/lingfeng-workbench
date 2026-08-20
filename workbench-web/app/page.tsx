@@ -51,7 +51,11 @@ export default async function Home() {
       description="只展示 Service 保存的短控制状态；完整日志、产物和 Runtime 对话始终留在执行电脑。"
     >
       <section className="metric-grid" aria-label="Workbench 概览">
-        <MetricCard label="进行中的工作" value={activeWorkItems.length} detail="等待、分配或执行中" />
+        <MetricCard
+          label="进行中的工作"
+          value={activeWorkItems.length}
+          detail={`${activeWorkItems.reduce((count, item) => count + item.waitingInteractionCount, 0)} 项等待输入`}
+        />
         <MetricCard label="在线节点" value={`${onlineNodes}/${homeState.nodes.length}`} detail="以最后心跳为准" />
         <MetricCard label="最近终态" value={recentTerminalWorkItems.length} detail="当前查询窗口内" />
       </section>
@@ -136,7 +140,16 @@ function WorkItemList({
           <Link href={`/work-items/${encodeURIComponent(workItem.workItemId)}`}>
             <span className="work-list__copy">
               <strong>{workItem.title}</strong>
-              <small>更新于 {formatTimestamp(workItem.updatedAt)}</small>
+              <small>
+                {workItem.phaseCode ? `${workItem.phaseCode} · ` : ""}
+                {workItem.progressSummary ?? "Service 尚未收到进度摘要"}
+              </small>
+              <small>
+                {workItem.waitingInteractionCount > 0
+                  ? `${workItem.waitingInteractionCount} 项等待输入 · `
+                  : ""}
+                最后同步于 {formatTimestamp(workItem.lastSyncedAt ?? workItem.updatedAt)}
+              </small>
             </span>
             <StatusBadge status={workItem.status} />
           </Link>

@@ -1,19 +1,22 @@
 package io.github.lingfeng.workbench.node.runtime.ws;
 
-import static io.github.lingfeng.workbench.node.TestAssignments.DIGEST;
+import static io.github.lingfeng.workbench.node.V2TestCommands.DIGEST;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import io.github.lingfeng.workbench.node.runtime.RuntimeEvent;
+import io.github.lingfeng.workbench.node.runtime.session.NormalizedRuntimeEvent;
 import org.junit.jupiter.api.Test;
 
 class WsTerminalInterpreterTest {
 
-    private final ObjectMapper objectMapper = new ObjectMapper();
+  private final ObjectMapper objectMapper = new ObjectMapper();
 
-    @Test
-    void acceptsPassedTerminalOnlyForExpectedDigestAndSuccessfulRuntime() throws Exception {
-        RuntimeEvent event = WsTerminalInterpreter.interpret(objectMapper.readTree("""
+  @Test
+  void acceptsPassedTerminalOnlyForExpectedDigestAndSuccessfulRuntime() throws Exception {
+    NormalizedRuntimeEvent.Terminal event =
+        WsTerminalInterpreter.interpret(
+            objectMapper.readTree(
+                """
                 {
                   "type": "lingfeng.terminal",
                   "missionDigest": "%s",
@@ -21,17 +24,27 @@ class WsTerminalInterpreterTest {
                   "acceptanceStatus": "PASSED",
                   "resultSummary": "accepted"
                 }
-                """.formatted(DIGEST)), DIGEST);
+                """
+                    .formatted(DIGEST)),
+            DIGEST);
 
-        assertThat(event).isEqualTo(new RuntimeEvent.Finished(
-                RuntimeEvent.RuntimeOutcome.SUCCEEDED,
-                RuntimeEvent.AcceptanceStatus.PASSED,
+    assertThat(event)
+        .isEqualTo(
+            new NormalizedRuntimeEvent.Terminal(
+                DIGEST,
+                NormalizedRuntimeEvent.RuntimeOutcome.SUCCEEDED,
+                NormalizedRuntimeEvent.AcceptanceStatus.PASSED,
                 "accepted"));
-    }
+  }
 
-    @Test
-    void rejectsTerminalForDifferentMissionDigest() throws Exception {
-        RuntimeEvent event = WsTerminalInterpreter.interpret(objectMapper.readTree("""
+  @Test
+  void preservesDifferentDigestSoSupervisorCanFailClosed() throws Exception {
+    String wrongDigest = "b".repeat(64);
+
+    NormalizedRuntimeEvent.Terminal event =
+        WsTerminalInterpreter.interpret(
+            objectMapper.readTree(
+                """
                 {
                   "type": "lingfeng.terminal",
                   "missionDigest": "%s",
@@ -39,16 +52,22 @@ class WsTerminalInterpreterTest {
                   "acceptanceStatus": "PASSED",
                   "resultSummary": "accepted"
                 }
-                """.formatted("b".repeat(64))), DIGEST);
+                """
+                    .formatted(wrongDigest)),
+            DIGEST);
 
-        assertThat(event).isEqualTo(new RuntimeEvent.Failed(
-                "Runtime terminal mission digest did not match",
-                RuntimeEvent.AcceptanceStatus.UNKNOWN));
-    }
+    assertThat(event.missionDigest()).isEqualTo(wrongDigest);
+    assertThat(event.runtimeOutcome()).isEqualTo(NormalizedRuntimeEvent.RuntimeOutcome.UNKNOWN);
+    assertThat(event.acceptanceStatus())
+        .isEqualTo(NormalizedRuntimeEvent.AcceptanceStatus.UNKNOWN);
+  }
 
-    @Test
-    void downgradesImpossiblePassedFailureToUnknown() throws Exception {
-        RuntimeEvent event = WsTerminalInterpreter.interpret(objectMapper.readTree("""
+  @Test
+  void downgradesImpossiblePassedFailureToUnknown() throws Exception {
+    NormalizedRuntimeEvent.Terminal event =
+        WsTerminalInterpreter.interpret(
+            objectMapper.readTree(
+                """
                 {
                   "type": "lingfeng.terminal",
                   "missionDigest": "%s",
@@ -56,10 +75,16 @@ class WsTerminalInterpreterTest {
                   "acceptanceStatus": "PASSED",
                   "resultSummary": "contradiction"
                 }
-                """.formatted(DIGEST)), DIGEST);
+                """
+                    .formatted(DIGEST)),
+            DIGEST);
 
-        assertThat(event).isEqualTo(new RuntimeEvent.Failed(
-                "Runtime claimed acceptance without successful execution",
-                RuntimeEvent.AcceptanceStatus.UNKNOWN));
-    }
+    assertThat(event)
+        .isEqualTo(
+            new NormalizedRuntimeEvent.Terminal(
+                DIGEST,
+                NormalizedRuntimeEvent.RuntimeOutcome.UNKNOWN,
+                NormalizedRuntimeEvent.AcceptanceStatus.UNKNOWN,
+                "Runtime claimed acceptance without successful execution"));
+  }
 }

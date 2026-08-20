@@ -18,7 +18,7 @@ npm test
 
 从 `.env.example` 复制本地配置，并在 Sites 运行时以 secret/环境变量提供相同字段：
 
-- `WORKBENCH_SERVICE_BASE_URL`：Service 根地址，生产环境必须使用 HTTPS；不要附加 `/api/client/v1`。
+- `WORKBENCH_SERVICE_BASE_URL`：Service 根地址，生产环境必须使用 HTTPS；不要附加 `/api/client/v2`。本地组合联调允许 `http://localhost` 或 `http://127.0.0.1`。
 - `WORKBENCH_SERVICE_READ_TOKEN`：仅有 Client API 读取权限的 Sites 机器凭证。
 - `WORKBENCH_SERVICE_TIMEOUT_MS`：可选，默认 5000 ms，范围 100–30000 ms。
 
@@ -28,7 +28,9 @@ npm test
 
 - `/`：活动工作、最近终态和 Node 摘要。
 - `/work-items/:id`：WorkItem、Mission 和 Run 短时间线。
-- `/interactions`：只读待处理 Interaction。
-- `/nodes`：Node 在线状态、能力和最后心跳。
+- `/interactions`：只读 Interaction 生命周期（不提供审批或回复操作）。
+- `/nodes`：Node 在线状态、能力、当前 Run、最后心跳和最后同步时间。
+
+Service 调用约定：Sites Worker 从运行时读取上述三个环境变量，只调用 `/api/client/v2` 下的固定 GET 路径，并发送 `Authorization: Bearer <read-only token>`。所有响应必须为严格 v2 JSON 且不超过 64 KiB；页面响应统一 `no-store`。
 
 部署、访问策略和运行时 secret 变更需要各自的显式 Gate；本模块的构建或测试通过不会自动触发部署。

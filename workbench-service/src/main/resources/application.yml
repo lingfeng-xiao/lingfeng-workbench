@@ -25,6 +25,11 @@ workbench:
   security:
     hermes-token: ${WORKBENCH_HERMES_TOKEN:}
     sites-token: ${WORKBENCH_SITES_TOKEN:}
+    creator-token: ${WORKBENCH_CREATOR_TOKEN:}
     node-tokens: {}
   node:
     offline-after: 90s
+    offline-scan-interval: 30s
+  notification:
+    lease-duration: 5m
+    max-attempts: 3

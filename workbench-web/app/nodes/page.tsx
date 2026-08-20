@@ -56,6 +56,16 @@ export default async function NodesPage() {
                 <span>最后心跳</span>
                 <strong>{formatTimestamp(node.lastHeartbeatAt)}</strong>
               </div>
+              <dl className="node-projection">
+                <div>
+                  <dt>当前 Run</dt>
+                  <dd>{node.currentRunId ?? "无活动 Run"}</dd>
+                </div>
+                <div>
+                  <dt>最后同步</dt>
+                  <dd>{formatTimestamp(node.lastSyncedAt)}</dd>
+                </div>
+              </dl>
               <div className="capability-list" aria-label="能力">
                 {node.capabilities.length === 0 ? (
                   <span className="capability capability--empty">未上报能力</span>

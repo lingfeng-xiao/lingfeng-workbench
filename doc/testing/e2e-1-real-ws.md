@@ -1,13 +1,15 @@
 ---
-status: current-evidence
+status: frozen-superseded
 authority: release-candidate-evidence
 source_ref: v0.2.0-mvp1-rc1
 owner: integration
-superseded_by: null
+superseded_by: e2e-v0.3-control-loop.md
 last_verified: 2026-08-20
 ---
 
 # E2E-1 真实 WS 尝试
+
+> 本文保留 v0.2 阶段的历史尝试。当前 DF-0.3 真实 WS Run、精确标识和 credential/model 阻塞证据见 `e2e-v0.3-control-loop.md`。
 
 ## 已验证部分
 

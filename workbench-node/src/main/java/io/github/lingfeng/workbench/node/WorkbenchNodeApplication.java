@@ -1,7 +1,7 @@
 package io.github.lingfeng.workbench.node;
 
 import io.github.lingfeng.workbench.node.config.NodeProperties;
-import io.github.lingfeng.workbench.node.orchestration.NodeWorker;
+import io.github.lingfeng.workbench.node.connection.ServiceConnectionLoop;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.SpringApplication;
@@ -21,11 +21,12 @@ public class WorkbenchNodeApplication {
     }
 
     @Bean
-    ApplicationRunner nodeWorkerRunner(NodeWorker nodeWorker) {
+    ApplicationRunner nodeWorkerRunner(
+            ServiceConnectionLoop connectionLoop) {
         return new ApplicationRunner() {
             @Override
             public void run(ApplicationArguments arguments) {
-                nodeWorker.runUntilInterrupted();
+                connectionLoop.runUntilInterrupted();
             }
         };
     }

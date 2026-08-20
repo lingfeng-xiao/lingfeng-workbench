@@ -1,60 +1,121 @@
 ---
 status: authoritative
-authority: main
-source_ref: architecture-v1
+authority: DF-0.3-control-loop
+source_ref: architecture-v2
 owner: architecture
 superseded_by: null
-last_verified: 2026-08-19
+last_verified: 2026-08-20
 ---
 
-# 三模块架构
+# 全局架构
 
-## 模块
+## 1. 目标
 
-仓库只包含三个业务模块：
+Workbench 把“业务控制”和“本机执行”分开：Service 保存最小、可信、可查询的控制状态；Node 在执行电脑上管理 Agent 会话；Agent Runtime 才读取源码、调用工具并完成实际工作。系统首先闭合两条链路：
 
-1. `workbench-service`：唯一业务状态来源，对外提供 Client API 与 Node API。
-2. `workbench-node`：执行电脑上的本地执行器和 Runtime 宿主。
-3. `workbench-web`：部署到 OpenAI Sites 的私有只读界面。
+1. **工作流闭环**：任务可在工作电脑无人值守运行，经历多轮 Agent Turn、暂停、审批、恢复和可信验收；
+2. **通知闭环**：Service 产生通知意图，Hermes 通过微信投递并回传审批，Web 能看到相同的短状态。
 
-Hermes 是外部客户端。它可以通过 Client API 创建工作、查询状态以及在后续 MVP 中解决 Interaction，但不拥有 Workbench 状态、不调度 Node、不连接 Runtime。
+## 2. 模块与外部组件
 
-## 依赖方向
+仓库只有三个业务模块：
+
+- `workbench-service`：全局控制面和唯一业务状态来源；
+- `workbench-node`：工作电脑上的本机控制面；
+- `workbench-web`：部署到 OpenAI Sites 的私有只读观察面。
+
+以下是外部组件，不进入仓库业务逻辑：
+
+- **Hermes**：消息投递和 Client API 协议适配器，不判断任务是否完成；
+- **Agent Runtime**：实际执行者，WS 只是第一个 Adapter 目标；
+- **微信**：Hermes 管理的通知和人工输入渠道；
+- **SPM/xlf**：工作电脑上的项目流程资料和完整工作证据，不是 Service 数据库。
+
+## 3. 控制关系
 
 ```text
-Hermes --------> Client API <-------- Sites Web
-                         |
-                  workbench-service
-                         |
-                    Node Protocol
-                         |
-                   workbench-node
-                         |
-                     Runtime SPI
-                         |
-                WS / Codex / Claude Code
+Hermes / Sites Web / trusted client
+                  |
+             Client API
+                  |
+        workbench-service        global control plane
+                  ^
+                  | outbound HTTPS: poll / event / ACK
+                  v
+          workbench-node         local control plane
+                  |
+        runtime-neutral session protocol
+                  |
+        Agent Runtime Adapter
+                  |
+          WS / future runtime    execution plane
+                  |
+       source / tools / xlf / artifacts
 ```
 
-- 三模块不共享源码、Entity、DTO、数据库或 `common/core/shared-model` 模块。
-- Web 不直连 Node，浏览器不直连 Service。
-- Node 不访问 Service 数据库，Service 不访问 Node 本地状态。
-- 两个 Java 模块分别依据版本化 OpenAPI 实现自己的边界模型。
+依赖规则：
 
-## 数据所有权
+- Service 永远不主动连接 Node；浏览器和 Hermes 也不连接 Node；
+- Node 不开放本机业务端口，只主动访问 Service 的 HTTPS 入口；
+- 三模块不共享源码、Entity、DTO、数据库、生成类或构建产物；
+- 模块间只依赖 `doc/contracts/` 中由架构 owner 维护的版本化合同；
+- Node 不理解 SPM 业务细节，Agent Runtime 根据 `executionProfile` 执行具体工作流；
+- Runtime 专用命令、Session 字段和原始事件不得进入 Service 或 Web 模型。
 
-Service 允许保存：稳定 ID、短目标、短验收、授权摘要、状态、短进度、短结果、Node 投影、幂等信息和必要审计。控制摘要最多 800 个字符，协议消息最多 64 KiB。
+## 4. 网络模型
 
-Node 本地保存：Mission 快照、Runtime Session/handle、原始事件、stderr、完整结果和本地证据。绝对路径、Runtime Session、完整日志和产物不得进入 Service API。
+工作电脑只要求出站 HTTPS：
 
-Sites Web 不拥有业务数据，D1/R2 绑定保持为空。浏览器存储只可用于非权威 UI 偏好。
+1. Service 先把命令持久化；
+2. Node 主动 poll，并在本地持久化后 ACK；
+3. Node 的事件先写本地 outbox，再主动 POST；
+4. Service ACK 后 Node 才清除 outbox；
+5. 断网期间正在执行的 Agent 可以继续，恢复后按本地顺序重放控制事件。
 
-## Runtime 边界
+MVP 使用普通 HTTPS 短轮询和 POST，不以入站端口、WebSocket、SSE、固定公网 IP 或端口转发作为正确性前提。Node 必须支持显式企业 HTTP/HTTPS 代理、TLS 信任配置、连接预检和指数退避。生产入口必须是稳定域名；会变化的 Quick Tunnel 只作临时验证。
 
-Node 不实现文件工具或操作系统沙箱。Runtime 及其适配器负责工作区、工具和隔离；Node 负责选择 Runtime profile、管理生命周期和保存本地证据。首个 E2E 只运行无工具 Mission，不代表文件能力已经验收。
+## 5. 数据所有权
 
-## 部署边界
+Service 允许保存：稳定 ID、不可变 Mission 合同及 digest、Run/Interaction/Node 状态、短阶段、短进度、短结果、命令、幂等记录、通知投递状态和必要审计。短文本最多 800 字符，单个协议消息最多 64 KiB。
 
-- Service 是个人服务器上的独立 Spring Boot 进程，使用本地 SQLite 文件。
-- Node 是 Windows 优先的 Spring Boot 非 Web 应用，只主动访问 Service HTTPS API。
-- Web 复用现有 Private Site，通过 Sites 服务端以只读机器凭证访问 Service。
-- 公司电脑不承担仓库源码开发。
+Node 本地保存：Mission 快照、控制命令日志、Runtime Session/handle、Turn、checkpoint、完整对话、tool call、文件 diff、原始事件、stderr、完整日志、完整结果、绝对路径、xlf 资料和 outbox。
+
+Service、Hermes 和 Web 禁止接收或保存：Runtime Session、resume token、本机绝对路径、源码、完整对话、原始 Runtime 事件、完整日志、diff 和产物。
+
+Sites Web 不拥有业务数据；D1/R2 保持 `null`，浏览器不持有 Service credential，不使用浏览器存储保存业务状态。
+
+## 6. 三层状态
+
+Run、Agent Session 和 Turn 是三个不同生命周期：
+
+- **Run**：Mission 的一次业务执行，Service 与 Node 共同识别；
+- **Agent Session**：Node 本地持有的 Runtime 会话，一个 Run 在 MVP 中恰好对应一个 Session；
+- **Turn**：向 Agent 提交的一次输入及其执行过程，一个 Session 可以有多个 Turn。
+
+Service 只保存 Run 状态和 `resumable` 投影，不保存 Session/Turn 标识。Node 串行化同一 Run 的命令、Runtime 事件、超时和取消，先持久化的终态决定本地结果，后到事件只作本地审计。
+
+## 7. 可信完成
+
+只有同时满足以下条件，Run、Mission 和 WorkItem 才能完成：
+
+1. Runtime 产生结构化终态；
+2. 终态 `missionDigest` 与不可变 Mission 完全一致；
+3. `runtimeOutcome=SUCCEEDED`；
+4. `acceptanceStatus=PASSED`；
+5. Node 已在本地持久化终态；
+6. Service 接受该状态转换。
+
+进程退出码为 0、Session 正常关闭、普通完成文本、断网或超时都不能替代可信终态。缺少终态或恢复身份不明确时进入 `uncertain`，不得自动新建第二个 Agent Session。
+
+## 8. 安全边界与不做项
+
+- 首轮单 Node、单活动 Run、单 Agent Session、多 Turn；
+- 不做多 Agent 协作、同一工作区并发 Run、跨 Node 迁移和自动重试副作用；
+- Node 不实现文件工具、远程文件 API、通用 shell API或工作区沙箱；
+- Service 不保存 Runtime 数据，不直接运行任务，不内置微信身份；
+- Hermes 不拥有状态机，不绕过 Service 控制 Node，不自动批准风险操作；
+- Web 保持只读，不解决 Interaction；
+- Kanban 不进入目标设计；
+- 公司电脑只运行经 Gate 批准的 Node 版本，不开发、提交或推送 Workbench 源码。
+
+详细业务流程见 `workflow.md`，冻结范围见 `design-freeze-v0.3.md`，跨模块消息语义见 `contracts/control-loop-v2.md`。

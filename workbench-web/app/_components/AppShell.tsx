@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 
 const NAVIGATION = [
   { href: "/", label: "概览" },
-  { href: "/interactions", label: "待处理" },
+  { href: "/interactions", label: "输入记录" },
   { href: "/nodes", label: "执行节点" },
 ] as const;
 

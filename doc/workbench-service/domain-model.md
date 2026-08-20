@@ -1,13 +1,15 @@
 ---
-status: authoritative
+status: frozen-superseded
 authority: main
 source_ref: service-domain-v1
 owner: workbench-service
-superseded_by: null
+superseded_by: detailed-design.md
 last_verified: 2026-08-19
 ---
 
 # Service 领域模型
+
+> 状态说明：本文保留 v0.2/S1 历史设计事实，不作为 v0.3 新实现输入；目标模型见 `detailed-design.md`。
 
 ## 对象
 

@@ -1,0 +1,15 @@
+{
+  "name": "lingfeng-workbench-contract-gate",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "lint": "redocly lint client-api-v2.openapi.yaml node-protocol-v2.openapi.yaml --extends=recommended --lint-config=error",
+    "test": "node validate-v2-fixtures.mjs"
+  },
+  "devDependencies": {
+    "@redocly/cli": "2.46.2",
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
+    "yaml": "2.9.0"
+  }
+}

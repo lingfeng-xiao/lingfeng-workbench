@@ -1,13 +1,15 @@
 ---
-status: authoritative
+status: frozen-superseded
 authority: main
 source_ref: architecture-v1
 owner: workbench-node
-superseded_by: null
+superseded_by: detailed-design.md
 last_verified: 2026-08-19
 ---
 
 # MVP-N1
+
+> 状态说明：本文保留 v0.2/N1 范围和验收事实，不作为 v0.3 新实现输入；目标范围见 `detailed-design.md` 和开发计划。
 
 ## 运行基线
 
