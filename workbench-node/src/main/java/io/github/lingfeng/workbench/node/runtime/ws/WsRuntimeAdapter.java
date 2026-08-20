@@ -241,9 +241,26 @@ public final class WsRuntimeAdapter {
   private NormalizedRuntimeEvent.Terminal interpretEmbeddedTerminal(
       String text, String expectedMissionDigest) {
     JsonNode decoded = decode(text.strip());
-    return decoded == null
-        ? null
-        : WsTerminalInterpreter.interpret(decoded, expectedMissionDigest);
+    NormalizedRuntimeEvent.Terminal terminal =
+        decoded == null
+            ? null
+            : WsTerminalInterpreter.interpret(decoded, expectedMissionDigest);
+    if (terminal != null) {
+      return terminal;
+    }
+    int objectStart = text.indexOf('{');
+    while (objectStart >= 0) {
+      decoded = decode(text.substring(objectStart));
+      terminal =
+          decoded == null
+              ? null
+              : WsTerminalInterpreter.interpret(decoded, expectedMissionDigest);
+      if (terminal != null) {
+        return terminal;
+      }
+      objectStart = text.indexOf('{', objectStart + 1);
+    }
+    return null;
   }
 
   private static void appendTurnResult(Path resultPath, TurnInput turn, List<String> turnText)
