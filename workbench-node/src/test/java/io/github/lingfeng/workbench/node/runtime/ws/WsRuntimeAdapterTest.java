@@ -1,12 +1,13 @@
 package io.github.lingfeng.workbench.node.runtime.ws;
 
-import static io.github.lingfeng.workbench.node.TestAssignments.DIGEST;
-import static io.github.lingfeng.workbench.node.TestAssignments.assignment;
+import static io.github.lingfeng.workbench.node.V2TestCommands.DIGEST;
+import static io.github.lingfeng.workbench.node.V2TestCommands.start;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import io.github.lingfeng.workbench.node.runtime.RuntimeEvent;
-import io.github.lingfeng.workbench.node.runtime.RuntimeExecutionContext;
+import io.github.lingfeng.workbench.node.runtime.session.NormalizedRuntimeEvent;
+import io.github.lingfeng.workbench.node.runtime.session.SessionContext;
+import io.github.lingfeng.workbench.node.runtime.session.TurnInput;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
@@ -23,141 +24,162 @@ import org.junit.jupiter.api.io.TempDir;
 
 class WsRuntimeAdapterTest {
 
-    @TempDir
-    Path temporaryDirectory;
+  @TempDir Path temporaryDirectory;
 
-    private final ObjectMapper objectMapper = new ObjectMapper();
+  private final ObjectMapper objectMapper = new ObjectMapper();
 
-    @Test
-    void readsEmbeddedStructuredTerminalAndKeepsRawEvidenceLocal() throws Exception {
-        Path evidenceDirectory = createEvidenceDirectory();
-        String terminal = """
-                {"type":"lingfeng.terminal","missionDigest":"%s","runtimeOutcome":"SUCCEEDED",\
-                "acceptanceStatus":"PASSED","resultSummary":"accepted"}
-                """.formatted(DIGEST).strip();
-        String stdout = """
-                {"sessionID":"private-session","type":"session"}
-                {"type":"message","part":{"type":"text","text":%s}}
-                """.formatted(objectMapper.writeValueAsString(terminal));
-        StubProcess process = new StubProcess(stdout, "private stderr", 0);
-        AtomicReference<List<String>> launchedCommand = new AtomicReference<>();
-        WsRuntimeAdapter adapter = new WsRuntimeAdapter("ws", objectMapper, command -> {
-            launchedCommand.set(command);
-            return process;
-        });
-        List<RuntimeEvent> events = new ArrayList<>();
+  @Test
+  void readsFinalStructuredTerminalAndKeepsRawEvidenceLocal() throws Exception {
+    Path evidenceDirectory = createEvidenceDirectory();
+    String terminal =
+        """
+        {"type":"lingfeng.terminal","missionDigest":"%s","runtimeOutcome":"SUCCEEDED",\
+        "acceptanceStatus":"PASSED","resultSummary":"accepted"}
+        """
+            .formatted(DIGEST)
+            .strip();
+    String stdout =
+        """
+        {"sessionID":"private-session","type":"session"}
+        {"type":"message","part":{"type":"text","text":%s}}
+        """
+            .formatted(objectMapper.writeValueAsString(terminal));
+    AtomicReference<List<String>> launchedCommand = new AtomicReference<>();
+    AtomicReference<Path> workingDirectory = new AtomicReference<>();
+    WsRuntimeAdapter adapter =
+        new WsRuntimeAdapter(
+            "ws",
+            objectMapper,
+            (command, directory) -> {
+              launchedCommand.set(command);
+              workingDirectory.set(directory);
+              return new StubProcess(stdout, "private stderr", 0);
+            });
+    List<NormalizedRuntimeEvent> events = new ArrayList<>();
+    SessionContext context =
+        new SessionContext(
+            start(), temporaryDirectory.resolve("workspace"), evidenceDirectory);
 
-        adapter.start(new RuntimeExecutionContext(
-                assignment(), temporaryDirectory.resolve("workspace"), evidenceDirectory), events::add);
+    String sessionId =
+        adapter.executeTurn(context, new TurnInput("turn-3", 3, "finish"), null, events::add);
 
-        assertThat(events).contains(
-                new RuntimeEvent.Started(true, "private-session"),
-                new RuntimeEvent.Finished(
-                        RuntimeEvent.RuntimeOutcome.SUCCEEDED,
-                        RuntimeEvent.AcceptanceStatus.PASSED,
-                        "accepted"));
-        assertThat(Files.readString(evidenceDirectory.resolve("runtime-events.ndjson")))
-                .contains("private-session", "lingfeng.terminal");
-        assertThat(Files.readString(evidenceDirectory.resolve("runtime-stderr.log")))
-                .isEqualTo("private stderr");
-        assertThat(Files.readString(evidenceDirectory.resolve("result.md")))
-                .contains("lingfeng.terminal");
-        assertThat(launchedCommand.get().getLast())
-                .contains(DIGEST, "Acceptance summary", "Authorized side effects")
-                .doesNotContain("\r", "\n");
+    assertThat(sessionId).isEqualTo("private-session");
+    assertThat(events)
+        .contains(
+            new NormalizedRuntimeEvent.Terminal(
+                DIGEST,
+                NormalizedRuntimeEvent.RuntimeOutcome.SUCCEEDED,
+                NormalizedRuntimeEvent.AcceptanceStatus.PASSED,
+                "accepted"));
+    assertThat(Files.readString(evidenceDirectory.resolve("runtime-events.ndjson")))
+        .contains("private-session", "lingfeng.terminal");
+    assertThat(Files.readString(evidenceDirectory.resolve("runtime-stderr.log")))
+        .isEqualTo("private stderr" + System.lineSeparator());
+    assertThat(Files.readString(evidenceDirectory.resolve("result.md")))
+        .contains("turn-3", "lingfeng.terminal");
+    assertThat(launchedCommand.get())
+        .doesNotContain("--dir")
+        .anySatisfy(
+            argument ->
+                assertThat(argument)
+                    .contains(DIGEST, "Acceptance summary", "Authorized side effects")
+                    .doesNotContain("\r", "\n"));
+    assertThat(workingDirectory.get()).isEqualTo(context.workspace());
+  }
+
+  @Test
+  void successfulFinalProcessWithoutStructuredTerminalIsUnknown() throws Exception {
+    Path evidenceDirectory = createEvidenceDirectory();
+    String stdout =
+        """
+        {"sessionID":"private-session","type":"session"}
+        {"type":"message","part":{"type":"text","text":"looks complete"}}
+        """;
+    WsRuntimeAdapter adapter =
+        new WsRuntimeAdapter(
+            "ws", objectMapper, (command, directory) -> new StubProcess(stdout, "", 0));
+    List<NormalizedRuntimeEvent> events = new ArrayList<>();
+
+    adapter.executeTurn(
+        new SessionContext(start(), temporaryDirectory.resolve("workspace"), evidenceDirectory),
+        new TurnInput("turn-3", 3, "finish"),
+        null,
+        events::add);
+
+    assertThat(events.getLast())
+        .isEqualTo(
+            new NormalizedRuntimeEvent.Terminal(
+                DIGEST,
+                NormalizedRuntimeEvent.RuntimeOutcome.UNKNOWN,
+                NormalizedRuntimeEvent.AcceptanceStatus.UNKNOWN,
+                "WS exited without a trusted structured terminal"));
+  }
+
+  private Path createEvidenceDirectory() throws Exception {
+    Path evidenceDirectory = temporaryDirectory.resolve("evidence");
+    Files.createDirectories(evidenceDirectory);
+    return evidenceDirectory;
+  }
+
+  static final class StubProcess extends Process {
+
+    private final InputStream stdout;
+    private final InputStream stderr;
+    private final int exitCode;
+    private boolean alive = true;
+
+    StubProcess(String stdout, String stderr, int exitCode) {
+      this.stdout = new ByteArrayInputStream(stdout.getBytes(StandardCharsets.UTF_8));
+      this.stderr = new ByteArrayInputStream(stderr.getBytes(StandardCharsets.UTF_8));
+      this.exitCode = exitCode;
     }
 
-    @Test
-    void successfulProcessExitWithoutStructuredTerminalIsUnknownFailure() throws Exception {
-        Path evidenceDirectory = createEvidenceDirectory();
-        String stdout = """
-                {"sessionID":"private-session","type":"session"}
-                {"type":"message","part":{"type":"text","text":"looks complete"}}
-                """;
-        WsRuntimeAdapter adapter = new WsRuntimeAdapter(
-                "ws", objectMapper, command -> new StubProcess(stdout, "", 0));
-        List<RuntimeEvent> events = new ArrayList<>();
-
-        adapter.start(new RuntimeExecutionContext(
-                assignment(), temporaryDirectory.resolve("workspace"), evidenceDirectory), events::add);
-
-        assertThat(events.getLast()).isEqualTo(new RuntimeEvent.Failed(
-                "WS exited without a trusted structured terminal",
-                RuntimeEvent.AcceptanceStatus.UNKNOWN));
-        assertThat(events).doesNotContain(new RuntimeEvent.Finished(
-                RuntimeEvent.RuntimeOutcome.SUCCEEDED,
-                RuntimeEvent.AcceptanceStatus.PASSED,
-                "looks complete"));
+    @Override
+    public OutputStream getOutputStream() {
+      return new ByteArrayOutputStream();
     }
 
-    private Path createEvidenceDirectory() throws Exception {
-        Path evidenceDirectory = temporaryDirectory.resolve("evidence");
-        Files.createDirectories(evidenceDirectory);
-        Files.createFile(evidenceDirectory.resolve("runtime-events.ndjson"));
-        Files.createFile(evidenceDirectory.resolve("runtime-stderr.log"));
-        Files.createFile(evidenceDirectory.resolve("result.md"));
-        return evidenceDirectory;
+    @Override
+    public InputStream getInputStream() {
+      return stdout;
     }
 
-    private static final class StubProcess extends Process {
-
-        private final InputStream stdout;
-        private final InputStream stderr;
-        private final int exitCode;
-        private boolean alive = true;
-
-        private StubProcess(String stdout, String stderr, int exitCode) {
-            this.stdout = new ByteArrayInputStream(stdout.getBytes(StandardCharsets.UTF_8));
-            this.stderr = new ByteArrayInputStream(stderr.getBytes(StandardCharsets.UTF_8));
-            this.exitCode = exitCode;
-        }
-
-        @Override
-        public OutputStream getOutputStream() {
-            return new ByteArrayOutputStream();
-        }
-
-        @Override
-        public InputStream getInputStream() {
-            return stdout;
-        }
-
-        @Override
-        public InputStream getErrorStream() {
-            return stderr;
-        }
-
-        @Override
-        public int waitFor() {
-            alive = false;
-            return exitCode;
-        }
-
-        @Override
-        public boolean waitFor(long timeout, TimeUnit unit) {
-            alive = false;
-            return true;
-        }
-
-        @Override
-        public int exitValue() {
-            return exitCode;
-        }
-
-        @Override
-        public void destroy() {
-            alive = false;
-        }
-
-        @Override
-        public Process destroyForcibly() {
-            alive = false;
-            return this;
-        }
-
-        @Override
-        public boolean isAlive() {
-            return alive;
-        }
+    @Override
+    public InputStream getErrorStream() {
+      return stderr;
     }
+
+    @Override
+    public int waitFor() {
+      alive = false;
+      return exitCode;
+    }
+
+    @Override
+    public boolean waitFor(long timeout, TimeUnit unit) {
+      alive = false;
+      return true;
+    }
+
+    @Override
+    public int exitValue() {
+      return exitCode;
+    }
+
+    @Override
+    public void destroy() {
+      alive = false;
+    }
+
+    @Override
+    public Process destroyForcibly() {
+      alive = false;
+      return this;
+    }
+
+    @Override
+    public boolean isAlive() {
+      return alive;
+    }
+  }
 }

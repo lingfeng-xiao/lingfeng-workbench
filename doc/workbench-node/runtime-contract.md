@@ -1,13 +1,15 @@
 ---
-status: authoritative
+status: frozen-superseded
 authority: main
 source_ref: architecture-v1
 owner: workbench-node
-superseded_by: null
+superseded_by: detailed-design.md
 last_verified: 2026-08-19
 ---
 
 # Runtime 合同
+
+> 状态说明：本文记录 v0.2/N1 的一次性 Runtime SPI，不作为 v0.3 新实现输入；会话式合同见 `detailed-design.md` 和 `../contracts/control-loop-v2.md`。
 
 ## SPI
 

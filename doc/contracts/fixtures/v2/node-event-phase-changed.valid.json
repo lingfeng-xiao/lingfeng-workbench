@@ -1,0 +1,1 @@
+{"protocolVersion":"2.0","messageId":"evt_phase_1","nodeId":"node_alpha","sentAt":"2026-08-20T01:03:00Z","eventType":"PHASE_CHANGED","localSequence":3,"workItemId":"wi_001","missionId":"mi_001","runId":"run_001","missionDigest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","phaseCode":"IMPLEMENTATION","phaseSummary":"Implementing the frozen contract"}

@@ -88,8 +88,8 @@ jobs:
       - name: Lint versioned contracts
         run: >-
           npx --yes @redocly/cli@2.46.2 lint
-          doc/contracts/client-api.openapi.yaml
-          doc/contracts/node-protocol.openapi.yaml
+          doc/contracts/client-api-v2.openapi.yaml
+          doc/contracts/node-protocol-v2.openapi.yaml
 
       - name: Build and test Service and Node
         run: mvn --batch-mode --no-transfer-progress clean verify

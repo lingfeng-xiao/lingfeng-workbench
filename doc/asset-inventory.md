@@ -1,7 +1,7 @@
 ---
 status: authoritative
-authority: main
-source_ref: asset-inventory-v1
+authority: DF-0.3-control-loop
+source_ref: asset-inventory-v2
 owner: architecture
 superseded_by: null
 last_verified: 2026-08-20
@@ -11,7 +11,9 @@ last_verified: 2026-08-20
 
 | 资产 | status | 来源 | 所属领域 | 允许复用 | 禁止继承 | 清理动作与 Gate |
 |---|---|---|---|---|---|---|
-| `doc/architecture.md`、`doc/contracts/` | authoritative | 当前 main | 全局 | 目标边界与接口 | 被模块私自修改 | 合同变更由架构 owner 审核 |
+| `doc/design-freeze-v0.3.md`、`doc/architecture.md`、`doc/workflow.md`、ADR-002、`control-loop-v2.md` | authoritative | `DF-0.3-control-loop` | 全局 | v0.3 目标边界、流程与语义合同 | 被模块私自修改；解释为已实现 | 合同变更由架构 owner 通过 ADR/新冻结版本审核 |
+| v0.2 Client/Node OpenAPI | frozen-superseded | `v0.2.0-mvp1-rc1` tag | 全局历史 | 历史审计 | 当前兼容承诺或实现输入 | 已从当前源码树移除；仅通过不可变 tag 恢复，不删除 tag |
+| S1/N1/W1 `mvp.md`、S1 `domain-model.md`、N1 `runtime-contract.md` | frozen-superseded | `v0.2.0-mvp1-rc1` | 三模块 | 当前实现和历史验收审计 | 新开发结构、同步 Runtime SPI、Interaction 中断语义 | 保留到 v0.3 发布审计完成，目标见各模块 `detailed-design.md` |
 | Python `lingfeng_workbench/` | legacy-reference | `968b88d9f869b0ed7a42c91e67c911f2c1e5b36c` / `7d5fcc2d1208e98532b33e5e91c1a04195f3a438` | Service/Node | 行为、失败证据、测试场景 | Python 结构、Kanban、Hermes 业务、裸审批 | E2E-1 真实 WS 与 smoke 通过后删除 |
 | `pyproject.toml`、`plugin.yaml`、根 Python 入口 | legacy-reference | `968b88d9f869b0ed7a42c91e67c911f2c1e5b36c` | 历史 Plugin | 恢复审计 | 新模块构建与部署 | 与 Python 源码同 Gate 删除 |
 | 旧 `docs/current-state.md` | current-evidence | `7d5fcc2d1208e98532b33e5e91c1a04195f3a438` | 历史 | MVP-A/B 事实 | 目标设计 | 移入 v0.1 历史目录 |
@@ -30,6 +32,6 @@ last_verified: 2026-08-20
 
 1. 新文档与合同成为 main 权威。
 2. 关闭冻结 PR 并删除非 main 开发分支；不合并其内容。已于 2026-08-20 完成，远端仅保留 `main`。
-3. 三模块独立测试与 E2E-1 通过。
-4. 真实 WS 与生产形态 smoke 通过后删除 Python 活跃源码。
+3. 三模块独立测试与 fake E2E 通过；旧协议源码与合同已按独立授权移除。
+4. 真实 WS 与生产形态 smoke 通过后才可另行评估 Python 活跃源码删除。
 5. Sites D1 等外部资源只在独立破坏性 Gate 下清理。

@@ -6,24 +6,38 @@ import java.util.Map;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 @ConfigurationProperties(prefix = "workbench")
-public record WorkbenchProperties(Security security, Node node) {
+public record WorkbenchProperties(Security security, Node node, Notification notification) {
 
-    public WorkbenchProperties {
-        security = security == null ? new Security("", "", Map.of()) : security;
-        node = node == null ? new Node(Duration.ofSeconds(90)) : node;
-    }
+  public WorkbenchProperties {
+    security = security == null ? new Security("", "", "", Map.of()) : security;
+    node = node == null ? new Node(Duration.ofSeconds(90), Duration.ofSeconds(30)) : node;
+    notification = notification == null ? new Notification(Duration.ofMinutes(5), 3) : notification;
+  }
 
-    public record Security(String hermesToken, String sitesToken, Map<String, String> nodeTokens) {
-        public Security {
-            hermesToken = hermesToken == null ? "" : hermesToken;
-            sitesToken = sitesToken == null ? "" : sitesToken;
-            nodeTokens = nodeTokens == null ? Map.of() : Map.copyOf(new LinkedHashMap<>(nodeTokens));
-        }
+  public record Security(
+      String hermesToken, String sitesToken, String creatorToken, Map<String, String> nodeTokens) {
+    public Security {
+      hermesToken = hermesToken == null ? "" : hermesToken;
+      sitesToken = sitesToken == null ? "" : sitesToken;
+      creatorToken = creatorToken == null ? "" : creatorToken;
+      nodeTokens = nodeTokens == null ? Map.of() : Map.copyOf(new LinkedHashMap<>(nodeTokens));
     }
+  }
 
-    public record Node(Duration offlineAfter) {
-        public Node {
-            offlineAfter = offlineAfter == null ? Duration.ofSeconds(90) : offlineAfter;
-        }
+  public record Node(Duration offlineAfter, Duration offlineScanInterval) {
+    public Node {
+      offlineAfter = offlineAfter == null ? Duration.ofSeconds(90) : offlineAfter;
+      offlineScanInterval =
+          offlineScanInterval == null ? Duration.ofSeconds(30) : offlineScanInterval;
     }
+  }
+
+  public record Notification(Duration leaseDuration, int maxAttempts) {
+    public Notification {
+      leaseDuration = leaseDuration == null ? Duration.ofMinutes(5) : leaseDuration;
+      if (maxAttempts < 1) {
+        maxAttempts = 3;
+      }
+    }
+  }
 }

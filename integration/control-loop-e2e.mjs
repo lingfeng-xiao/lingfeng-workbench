@@ -1,0 +1,685 @@
+import assert from "node:assert/strict";
+import { spawn, spawnSync } from "node:child_process";
+import { createWriteStream } from "node:fs";
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  writeFile,
+} from "node:fs/promises";
+import { createServer } from "node:net";
+import { tmpdir } from "node:os";
+import { basename, dirname, join, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+
+const repositoryDirectory = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const javaHome = process.env.JAVA_HOME;
+assert.ok(javaHome, "JAVA_HOME must point to a Java 21 JDK");
+
+const javaExecutable = join(javaHome, "bin", process.platform === "win32" ? "java.exe" : "java");
+const keytoolExecutable = join(javaHome, "bin", process.platform === "win32" ? "keytool.exe" : "keytool");
+const serviceJar = join(repositoryDirectory, "workbench-service", "target", "workbench-service-0.2.0-mvp1-rc1.jar");
+const nodeJar = join(repositoryDirectory, "workbench-node", "target", "workbench-node-0.2.0-mvp1-rc1.jar");
+const webWorker = join(repositoryDirectory, "workbench-web", "dist", "server", "index.js");
+
+const creatorToken = "creator-local-e2e-token-0000000000000001";
+const hermesToken = "hermes-local-e2e-token-00000000000000001";
+const sitesToken = "sites-local-e2e-token-000000000000000001";
+const nodeToken = "node-local-e2e-token-0000000000000000001";
+const nodeId = "node_alpha";
+const workspaceRef = "workspace_main";
+
+await Promise.all([access(javaExecutable), access(keytoolExecutable), access(serviceJar), access(nodeJar), access(webWorker)]);
+
+const evidenceRoot = await mkdtemp(join(tmpdir(), "lingfeng-control-loop-e2e-"));
+const tls = await createLocalTls(evidenceRoot);
+const realWsMode = process.argv.includes("--real-ws");
+const realWsExecutable = realWsMode ? resolveWsExecutable() : null;
+const summary = realWsMode
+  ? {
+      executedAt: new Date().toISOString(),
+      evidenceRoot,
+      javaVersion: javaVersionLine(runChecked(javaExecutable, ["-version"]).stderr),
+      realWs: await runRealWsScenario(join(evidenceRoot, "real-ws")),
+    }
+  : {
+      executedAt: new Date().toISOString(),
+      evidenceRoot,
+      javaVersion: javaVersionLine(runChecked(javaExecutable, ["-version"]).stderr),
+      flow: await runFlowScenario(join(evidenceRoot, "flow")),
+      notify: await runNotificationScenario(join(evidenceRoot, "notify")),
+    };
+await writeFile(join(evidenceRoot, "summary.json"), JSON.stringify(summary, null, 2), "utf8");
+console.log(JSON.stringify(summary, null, 2));
+console.log(realWsMode
+  ? "Real WS control-loop attempt completed; inspect realWs.status and blocker evidence."
+  : "E2E-FLOW and E2E-NOTIFY passed with real Service/Node JARs and the Web production build.");
+
+async function runRealWsScenario(scenarioDirectory) {
+  await mkdir(scenarioDirectory, { recursive: true });
+  const port = await reservePort();
+  const serviceState = join(scenarioDirectory, "service");
+  const nodeState = join(scenarioDirectory, "node");
+  const workspace = join(scenarioDirectory, "workspace-no-tools");
+  await Promise.all([mkdir(serviceState), mkdir(nodeState), mkdir(workspace)]);
+  const serviceDatabase = join(serviceState, "service.db");
+  let service = await startService({ scenarioDirectory, serviceDatabase, port });
+  let node = await startNode({
+    scenarioDirectory,
+    nodeState,
+    workspace,
+    port,
+    runtimeKind: "ws",
+    wsExecutable: realWsExecutable,
+  });
+
+  try {
+    await waitForNodeRegistration(port);
+    const created = await createWorkItem(
+      port,
+      "real-ws-create-key",
+      "Real WS three-Turn no-tool control loop",
+      "ws",
+      "Use one Agent Session for three no-tool Turns and return the trusted terminal only on Turn 3");
+    const deadline = Date.now() + 30_000;
+    let detail;
+    do {
+      detail = await getWorkItem(port, created.workItemId);
+      if (["completed", "failed", "interrupted", "uncertain", "cancelled"].includes(detail.run.status)) {
+        break;
+      }
+      await sleep(250);
+    } while (Date.now() < deadline);
+
+    const runDirectory = join(nodeState, "runs", created.runId);
+    const runtimeEvents = await readFile(join(runDirectory, "runtime-events.ndjson"), "utf8").catch(() => "");
+    const stderr = await readFile(join(runDirectory, "runtime-stderr.log"), "utf8").catch(() => "");
+    const sessionMatch = runtimeEvents.match(/"sessionID"\s*:\s*"([^"]+)"/);
+    return {
+      workItemId: created.workItemId,
+      runId: created.runId,
+      missionDigest: created.missionDigest,
+      status: detail.run.status,
+      resultSummary: detail.run.resultSummary || null,
+      submittedTurns: Number(querySqlite(join(nodeState, "node.db"),
+        "SELECT COUNT(*) FROM control_turn")),
+      finishedTurns: Number(querySqlite(join(nodeState, "node.db"),
+        "SELECT COUNT(*) FROM control_turn WHERE state='finished'")),
+      wsSessionId: sessionMatch ? sessionMatch[1] : null,
+      runtimeEventsBytes: Buffer.byteLength(runtimeEvents),
+      runtimeStderrBytes: Buffer.byteLength(stderr),
+      nodeEvidenceDirectory: runDirectory,
+      blocker: detail.run.status === "completed" ? null
+        : "WS did not produce a trusted three-Turn terminal within the bounded observation window",
+    };
+  } finally {
+    await stopChild(node);
+    await stopChild(service);
+  }
+}
+
+async function runFlowScenario(scenarioDirectory) {
+  await mkdir(scenarioDirectory, { recursive: true });
+  const port = await reservePort();
+  const serviceState = join(scenarioDirectory, "service");
+  const nodeState = join(scenarioDirectory, "node");
+  const workspace = join(scenarioDirectory, "workspace-sensitive-local-path");
+  await Promise.all([mkdir(serviceState), mkdir(nodeState), mkdir(workspace)]);
+  const serviceDatabase = join(serviceState, "service.db");
+  let service = await startService({ scenarioDirectory, serviceDatabase, port });
+  let node = await startNode({ scenarioDirectory, nodeState, workspace, port, scenario: "FLOW", turnDelay: "PT2S" });
+
+  try {
+    await waitForNodeRegistration(port);
+    const created = await createWorkItem(port, "flow-create-key", "E2E FLOW with Service outage");
+    await waitFor(async () => {
+      const detail = await getWorkItem(port, created.workItemId);
+      return detail.run.status === "running" ? detail : null;
+    }, 30_000, "FLOW Run to start");
+
+    await stopChild(service);
+    service = null;
+    await waitFor(async () => {
+      const turnCount = Number(querySqlite(join(nodeState, "node.db"),
+        "SELECT COUNT(*) FROM control_turn WHERE state='finished'"));
+      const outboxCount = Number(querySqlite(join(nodeState, "node.db"),
+        "SELECT COUNT(*) FROM control_outbox"));
+      return turnCount >= 3 && outboxCount > 0 ? { turnCount, outboxCount } : null;
+    }, 30_000, "Runtime to finish three Turns while Service is offline");
+
+    service = await startService({ scenarioDirectory, serviceDatabase, port });
+    const completed = await waitFor(async () => {
+      const detail = await getWorkItem(port, created.workItemId);
+      return detail.run.status === "completed" ? detail : null;
+    }, 40_000, "FLOW outbox replay to complete the Run");
+    assert.equal(completed.run.resultSummary, "Three deterministic turns passed the frozen acceptance checks");
+    assert.equal(completed.run.resumable, false);
+
+    await waitFor(() => Number(querySqlite(join(nodeState, "node.db"),
+      "SELECT COUNT(*) FROM control_outbox")) === 0, 20_000, "FLOW outbox to drain");
+    const missionSnapshot = JSON.parse(await readFile(join(nodeState, "runs", created.runId, "mission.json"), "utf8"));
+    assert.equal(missionSnapshot.missionDigest, created.missionDigest);
+    assert.equal(Number(querySqlite(join(nodeState, "node.db"),
+      "SELECT COUNT(*) FROM control_agent_session")), 1);
+    assert.equal(Number(querySqlite(join(nodeState, "node.db"),
+      "SELECT COUNT(*) FROM control_turn WHERE state='finished'")), 3);
+
+    await stopChild(service);
+    service = await startService({ scenarioDirectory, serviceDatabase, port });
+    const afterRestart = await getWorkItem(port, created.workItemId);
+    assert.equal(afterRestart.run.status, "completed");
+    const webHtml = await renderProductionWeb(port, `/work-items/${created.workItemId}`);
+    assert.match(webHtml, /E2E FLOW with Service outage/);
+    assert.match(webHtml, /已完成/);
+
+    await stopChild(node);
+    node = null;
+    await stopChild(service);
+    service = null;
+    await assertServiceContainsNoLocalEvidence(serviceState, [workspace, "fake-session:", "runtime-events.ndjson"]);
+    const evidenceFiles = await readdir(join(nodeState, "runs", created.runId));
+    for (const requiredFile of [
+      "mission.json",
+      "control-commands.ndjson",
+      "normalized-events.ndjson",
+      "runtime-events.ndjson",
+      "runtime-stderr.log",
+      "conversation.ndjson",
+      "result.md",
+    ]) {
+      assert.ok(evidenceFiles.includes(requiredFile), `missing Node evidence file ${requiredFile}`);
+    }
+    return {
+      workItemId: created.workItemId,
+      runId: created.runId,
+      missionDigest: created.missionDigest,
+      turns: 3,
+      finalStatus: afterRestart.run.status,
+      webRenderedCompleted: true,
+      serviceRestarts: 2,
+      nodeEvidenceFiles: evidenceFiles.sort(),
+    };
+  } finally {
+    await stopChild(node);
+    await stopChild(service);
+  }
+}
+
+async function runNotificationScenario(scenarioDirectory) {
+  await mkdir(scenarioDirectory, { recursive: true });
+  const port = await reservePort();
+  const serviceState = join(scenarioDirectory, "service");
+  const nodeState = join(scenarioDirectory, "node");
+  const workspace = join(scenarioDirectory, "workspace-sensitive-local-path");
+  await Promise.all([mkdir(serviceState), mkdir(nodeState), mkdir(workspace)]);
+  const serviceDatabase = join(serviceState, "service.db");
+  let service = await startService({ scenarioDirectory, serviceDatabase, port });
+  let node = await startNode({ scenarioDirectory, nodeState, workspace, port, scenario: "INTERACTION", turnDelay: "PT0.5S" });
+
+  try {
+    await waitForNodeRegistration(port);
+    const created = await createWorkItem(port, "notify-create-key", "E2E NOTIFY same Session resume");
+    const pendingInteraction = await waitFor(async () => {
+      const interactions = await requestJson(port, "/api/client/v2/interactions?state=pending&limit=100", {
+        token: sitesToken,
+      });
+      return interactions.find((interaction) => interaction.runId === created.runId) ?? null;
+    }, 30_000, "Interaction to become pending");
+
+    const notification = await requestJson(port, "/api/client/v2/notifications/poll", {
+      token: hermesToken,
+      method: "POST",
+      body: { requestId: "poll_notify_1", targetAlias: "owner", sentAt: new Date().toISOString() },
+    });
+    assert.equal(notification.notificationAvailable, true);
+    assert.equal(notification.notificationType, "INTERACTION_REQUIRED");
+    assert.equal(notification.interactionId, pendingInteraction.interactionId);
+
+    const deliveryBody = {
+      deliveryEventId: "delivery_notify_1",
+      notificationId: notification.notificationId,
+      outcome: "DELIVERED",
+      reportedAt: new Date().toISOString(),
+    };
+    const delivery = await requestJson(port,
+      `/api/client/v2/notifications/${notification.notificationId}/delivery-events`, {
+        token: hermesToken,
+        method: "POST",
+        headers: { "Idempotency-Key": "delivery-notify-key" },
+        body: deliveryBody,
+      });
+    const duplicateDelivery = await requestJson(port,
+      `/api/client/v2/notifications/${notification.notificationId}/delivery-events`, {
+        token: hermesToken,
+        method: "POST",
+        headers: { "Idempotency-Key": "delivery-notify-key" },
+        body: deliveryBody,
+      });
+    assert.equal(delivery.status, "delivered");
+    assert.equal(duplicateDelivery.duplicate, true);
+
+    const baseResolution = {
+      interactionId: pendingInteraction.interactionId,
+      runId: created.runId,
+      checkpointId: pendingInteraction.checkpointId,
+      missionDigest: created.missionDigest,
+      decision: "APPROVE",
+      responseSummary: "Approved by fake Hermes for the frozen local scope",
+      resolvedBy: "fake-hermes",
+      resolvedAt: new Date().toISOString(),
+    };
+    await requestJson(port, `/api/client/v2/interactions/${pendingInteraction.interactionId}/resolution`, {
+      token: hermesToken,
+      method: "POST",
+      headers: { "Idempotency-Key": "wrong-digest-key" },
+      body: { ...baseResolution, missionDigest: "b".repeat(64) },
+      expectedStatus: 409,
+    });
+    await requestJson(port, `/api/client/v2/interactions/${pendingInteraction.interactionId}/resolution`, {
+      token: hermesToken,
+      method: "POST",
+      headers: { "Idempotency-Key": "wrong-checkpoint-key" },
+      body: { ...baseResolution, checkpointId: "cp_wrong" },
+      expectedStatus: 409,
+    });
+    const resolution = await requestJson(port,
+      `/api/client/v2/interactions/${pendingInteraction.interactionId}/resolution`, {
+        token: hermesToken,
+        method: "POST",
+        headers: { "Idempotency-Key": "resolution-notify-key" },
+        body: baseResolution,
+      });
+    const duplicateResolution = await requestJson(port,
+      `/api/client/v2/interactions/${pendingInteraction.interactionId}/resolution`, {
+        token: hermesToken,
+        method: "POST",
+        headers: { "Idempotency-Key": "resolution-notify-key" },
+        body: baseResolution,
+      });
+    assert.equal(duplicateResolution.duplicate, true);
+    assert.equal(duplicateResolution.commandId, resolution.commandId);
+
+    const completed = await waitFor(async () => {
+      const detail = await getWorkItem(port, created.workItemId);
+      const interaction = detail.interactions.find((candidate) => candidate.interactionId === pendingInteraction.interactionId);
+      return detail.run.status === "completed" && interaction?.state === "consumed" ? detail : null;
+    }, 40_000, "Interaction response to be consumed by the same Session");
+    assert.equal(completed.run.resultSummary, "Three deterministic turns passed the frozen acceptance checks");
+
+    await requestJson(port, `/api/client/v2/interactions/${pendingInteraction.interactionId}/resolution`, {
+      token: hermesToken,
+      method: "POST",
+      headers: { "Idempotency-Key": "wrong-terminal-state-key" },
+      body: { ...baseResolution, responseSummary: "Late conflicting resolution" },
+      expectedStatus: 409,
+    });
+
+    const duplicateAckPayload = JSON.parse(querySqlite(join(nodeState, "node.db"),
+      "SELECT payload_json FROM control_local_event WHERE event_type='COMMAND_STORED' ORDER BY local_sequence DESC LIMIT 1"));
+    const duplicateAck = await requestJson(port, "/api/node/v2/events", {
+      token: nodeToken,
+      method: "POST",
+      body: duplicateAckPayload,
+    });
+    assert.equal(duplicateAck.duplicate, true);
+    await requestJson(port, "/api/node/v2/events", {
+      token: nodeToken,
+      method: "POST",
+      body: { ...duplicateAckPayload, messageId: "wrong_node_event", nodeId: "node_beta" },
+      expectedStatus: 403,
+    });
+
+    await waitFor(() => Number(querySqlite(join(nodeState, "node.db"),
+      "SELECT COUNT(*) FROM control_outbox")) === 0, 20_000, "NOTIFY outbox to drain");
+    assert.equal(Number(querySqlite(join(nodeState, "node.db"),
+      "SELECT COUNT(*) FROM control_agent_session")), 1);
+    assert.equal(Number(querySqlite(join(nodeState, "node.db"),
+      "SELECT COUNT(*) FROM control_received_command WHERE command_type='PROVIDE_INTERACTION_RESPONSE'")), 1);
+    assert.equal(querySqlite(join(nodeState, "node.db"),
+      "SELECT response_state FROM control_interaction_binding LIMIT 1"), "consumed");
+
+    const webHtml = await renderProductionWeb(port, `/work-items/${created.workItemId}`);
+    assert.match(webHtml, /E2E NOTIFY same Session resume/);
+    assert.match(webHtml, /已消费/);
+    await stopChild(node);
+    node = null;
+    await stopChild(service);
+    service = null;
+    await assertServiceContainsNoLocalEvidence(serviceState, [workspace, "fake-session:", "conversation.ndjson"]);
+    return {
+      workItemId: created.workItemId,
+      runId: created.runId,
+      interactionId: pendingInteraction.interactionId,
+      notificationId: notification.notificationId,
+      responseCommandId: resolution.commandId,
+      finalStatus: completed.run.status,
+      interactionState: "consumed",
+      duplicateDelivery: duplicateDelivery.duplicate,
+      duplicateResolution: duplicateResolution.duplicate,
+      duplicateAck: duplicateAck.duplicate,
+      sameSessionCount: 1,
+      webRenderedConsumed: true,
+    };
+  } finally {
+    await stopChild(node);
+    await stopChild(service);
+  }
+}
+
+async function createLocalTls(directory) {
+  const serverStore = join(directory, "service.p12");
+  const certificate = join(directory, "service.crt");
+  const trustStore = join(directory, "truststore.p12");
+  const trustStorePasswordFile = join(directory, "truststore.password");
+  const password = "local-e2e-changeit";
+  runChecked(keytoolExecutable, [
+    "-genkeypair", "-alias", "service", "-keyalg", "RSA", "-keysize", "2048",
+    "-validity", "2", "-dname", "CN=localhost",
+    "-ext", "SAN=dns:localhost,ip:127.0.0.1", "-storetype", "PKCS12",
+    "-keystore", serverStore, "-storepass", password, "-keypass", password, "-noprompt",
+  ]);
+  runChecked(keytoolExecutable, [
+    "-exportcert", "-alias", "service", "-keystore", serverStore,
+    "-storepass", password, "-rfc", "-file", certificate,
+  ]);
+  runChecked(keytoolExecutable, [
+    "-importcert", "-alias", "service", "-file", certificate, "-keystore", trustStore,
+    "-storetype", "PKCS12", "-storepass", password, "-noprompt",
+  ]);
+  await writeFile(trustStorePasswordFile, password, "utf8");
+  return { serverStore, trustStore, trustStorePasswordFile, password };
+}
+
+async function startService({ scenarioDirectory, serviceDatabase, port }) {
+  const log = createWriteStream(join(scenarioDirectory, "service.log"), { flags: "a" });
+  const child = spawn(javaExecutable, [
+    "-jar", serviceJar,
+    `--server.address=127.0.0.1`,
+    `--server.port=${port}`,
+    "--server.ssl.enabled=true",
+    `--server.ssl.key-store=file:${toForwardSlashes(tls.serverStore)}`,
+    "--server.ssl.key-store-type=PKCS12",
+    `--server.ssl.key-store-password=${tls.password}`,
+    `--workbench.security.node-tokens.${nodeId}=${nodeToken}`,
+    "--workbench.node.offline-scan-interval=PT1H",
+  ], {
+    cwd: scenarioDirectory,
+    env: {
+      ...process.env,
+      WORKBENCH_DATABASE_URL: `jdbc:sqlite:${toForwardSlashes(serviceDatabase)}`,
+      WORKBENCH_CREATOR_TOKEN: creatorToken,
+      WORKBENCH_HERMES_TOKEN: hermesToken,
+      WORKBENCH_SITES_TOKEN: sitesToken,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  child.stdout.pipe(log, { end: false });
+  child.stderr.pipe(log, { end: false });
+  child.once("exit", () => log.end());
+  await waitFor(async () => {
+    if (child.exitCode !== null) {
+      throw new Error(`Service exited before becoming ready; inspect ${join(scenarioDirectory, "service.log")}`);
+    }
+    try {
+      await requestJson(port, "/api/client/v2/nodes", { token: sitesToken });
+      return true;
+    } catch {
+      return false;
+    }
+  }, 45_000, "Service HTTPS endpoint to become ready");
+  return child;
+}
+
+async function startNode({
+  scenarioDirectory,
+  nodeState,
+  workspace,
+  port,
+  scenario,
+  turnDelay,
+  runtimeKind = "fake-session",
+  wsExecutable = "ws",
+}) {
+  const log = createWriteStream(join(scenarioDirectory, "node.log"), { flags: "a" });
+  const child = spawn(javaExecutable, [
+    "-jar", nodeJar,
+    `--workbench.node.node-id=${nodeId}`,
+    "--workbench.node.display-name=E2E Node",
+    `--workbench.node.service-base-uri=https://localhost:${port}/`,
+    `--workbench.node.bearer-token=${nodeToken}`,
+    `--workbench.node.state-directory=${nodeState}`,
+    "--workbench.node.poll-interval=PT0.2S",
+    "--workbench.node.heartbeat-interval=PT0.5S",
+    "--workbench.node.request-timeout=PT3S",
+    "--workbench.node.connect-timeout=PT2S",
+    "--workbench.node.backoff-initial=PT0.2S",
+    "--workbench.node.backoff-maximum=PT1S",
+    `--workbench.node.runtime-kind=${runtimeKind}`,
+    `--workbench.node.ws-executable=${wsExecutable}`,
+    ...(runtimeKind === "fake-session" ? [
+      `--workbench.node.fake-scenario=${scenario}`,
+      `--workbench.node.fake-turn-delay=${turnDelay}`,
+    ] : []),
+    `--workbench.node.trust-store=${tls.trustStore}`,
+    `--workbench.node.trust-store-password-file=${tls.trustStorePasswordFile}`,
+    `--workbench.node.workspaces.${workspaceRef}=${workspace}`,
+  ], {
+    cwd: scenarioDirectory,
+    env: process.env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  child.stdout.pipe(log, { end: false });
+  child.stderr.pipe(log, { end: false });
+  child.once("exit", () => log.end());
+  return child;
+}
+
+async function waitForNodeRegistration(port) {
+  return waitFor(async () => {
+    const nodes = await requestJson(port, "/api/client/v2/nodes", { token: sitesToken });
+    return nodes.some((node) => node.nodeId === nodeId) ? nodes : null;
+  }, 30_000, "Node registration");
+}
+
+async function createWorkItem(
+  port,
+  idempotencyKey,
+  title,
+  runtimeKind = "fake-session",
+  objective = "Complete three deterministic Turns using one local Agent Session",
+) {
+  return requestJson(port, "/api/client/v2/work-items", {
+    token: creatorToken,
+    method: "POST",
+    expectedStatus: 201,
+    headers: { "Idempotency-Key": idempotencyKey },
+    body: {
+      title,
+      objective,
+      acceptanceSummary: "Matching digest and explicit SUCCEEDED PASSED terminal",
+      authorizedSideEffectsSummary: "Local temporary evidence only",
+      targetNodeId: nodeId,
+      workspaceRef,
+      runtimeKind,
+      executionProfile: "spm-change-v1",
+      priority: 0,
+      dataBoundaryAcknowledged: true,
+    },
+  });
+}
+
+async function getWorkItem(port, workItemId) {
+  return requestJson(port, `/api/client/v2/work-items/${workItemId}`, { token: sitesToken });
+}
+
+async function requestJson(port, path, {
+  token,
+  method = "GET",
+  body,
+  headers = {},
+  expectedStatus = 200,
+} = {}) {
+  const response = await fetch(`https://localhost:${port}${path}`, {
+    method,
+    headers: {
+      Accept: "application/json",
+      ...(body ? { "Content-Type": "application/json" } : {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...headers,
+    },
+    body: body ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(4_000),
+  });
+  const responseText = await response.text();
+  if (response.status !== expectedStatus) {
+    throw new Error(`${method} ${path} returned ${response.status}, expected ${expectedStatus}: ${responseText.slice(0, 800)}`);
+  }
+  return responseText ? JSON.parse(responseText) : null;
+}
+
+async function renderProductionWeb(port, path) {
+  const previous = {
+    baseUrl: process.env.WORKBENCH_SERVICE_BASE_URL,
+    readToken: process.env.WORKBENCH_SERVICE_READ_TOKEN,
+    timeout: process.env.WORKBENCH_SERVICE_TIMEOUT_MS,
+  };
+  process.env.WORKBENCH_SERVICE_BASE_URL = `https://localhost:${port}`;
+  process.env.WORKBENCH_SERVICE_READ_TOKEN = sitesToken;
+  process.env.WORKBENCH_SERVICE_TIMEOUT_MS = "5000";
+  try {
+    const workerUrl = pathToFileURL(webWorker);
+    workerUrl.searchParams.set("e2e", `${Date.now()}-${Math.random()}`);
+    const { default: worker } = await import(workerUrl.href);
+    const response = await worker.fetch(new Request(`http://localhost${path}`, {
+      headers: {
+        Accept: "text/html",
+        "oai-authenticated-user-id": "e2e-user",
+        "oai-authenticated-user-email": "owner@example.com",
+      },
+    }), {
+      ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) },
+    }, {
+      waitUntil() {},
+      passThroughOnException() {},
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    return response.text();
+  } finally {
+    restoreEnvironment("WORKBENCH_SERVICE_BASE_URL", previous.baseUrl);
+    restoreEnvironment("WORKBENCH_SERVICE_READ_TOKEN", previous.readToken);
+    restoreEnvironment("WORKBENCH_SERVICE_TIMEOUT_MS", previous.timeout);
+  }
+}
+
+async function assertServiceContainsNoLocalEvidence(serviceState, forbiddenValues) {
+  const stateFiles = (await readdir(serviceState)).filter((name) => name.startsWith("service.db"));
+  const combined = Buffer.concat(await Promise.all(stateFiles.map((name) => readFile(join(serviceState, name))))).toString("latin1");
+  for (const forbiddenValue of forbiddenValues) {
+    assert.equal(combined.includes(forbiddenValue), false, `Service state leaked local evidence: ${forbiddenValue}`);
+  }
+}
+
+function querySqlite(database, sql) {
+  const script = [
+    "import sqlite3,sys",
+    "connection=sqlite3.connect(sys.argv[1], timeout=5)",
+    "row=connection.execute(sys.argv[2]).fetchone()",
+    "print('' if row is None or row[0] is None else row[0])",
+    "connection.close()",
+  ].join(";");
+  const result = runChecked("python", ["-c", script, database, sql]);
+  return result.stdout.trim();
+}
+
+async function waitFor(action, timeoutMs, label) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError;
+  while (Date.now() < deadline) {
+    try {
+      const value = await action();
+      if (value) return value;
+    } catch (error) {
+      lastError = error;
+    }
+    await sleep(200);
+  }
+  throw new Error(`Timed out waiting for ${label}${lastError ? `: ${lastError.message}` : ""}`);
+}
+
+function resolveWsExecutable() {
+  const configured = process.env.WORKBENCH_WS_EXECUTABLE?.trim();
+  if (configured) return configured;
+  if (process.platform !== "win32") return "ws";
+  const discovered = spawnSync("where.exe", ["ws.cmd"], {
+    encoding: "utf8",
+    windowsHide: true,
+  });
+  const executable = discovered.stdout
+    ?.split(/\r?\n/u)
+    .map((line) => line.trim())
+    .find(Boolean);
+  assert.equal(discovered.status, 0, "WS executable was not found on PATH");
+  assert.ok(executable, "WS executable was not found on PATH");
+  return executable;
+}
+
+async function stopChild(child) {
+  if (!child || child.exitCode !== null) return;
+  if (process.platform === "win32") {
+    spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore" });
+    await Promise.race([
+      new Promise((resolveExit) => child.once("exit", resolveExit)),
+      sleep(5_000),
+    ]);
+    return;
+  }
+  child.kill();
+  await Promise.race([
+    new Promise((resolveExit) => child.once("exit", resolveExit)),
+    sleep(5_000),
+  ]);
+}
+
+async function reservePort() {
+  const server = createServer();
+  await new Promise((resolveListen, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolveListen);
+  });
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  await new Promise((resolveClose, reject) => server.close((error) => error ? reject(error) : resolveClose()));
+  return address.port;
+}
+
+function runChecked(command, args) {
+  const result = spawnSync(command, args, { encoding: "utf8", windowsHide: true });
+  if (result.status !== 0) {
+    throw new Error(`${basename(command)} failed with ${result.status}: ${result.stderr || result.stdout}`);
+  }
+  return result;
+}
+
+function javaVersionLine(stderr) {
+  const versionLine = stderr.split(/\r?\n/).find((line) => line.includes(" version "));
+  assert.ok(versionLine, "java -version did not report a version line");
+  return versionLine;
+}
+
+function toForwardSlashes(path) {
+  return path.replaceAll("\\", "/");
+}
+
+function restoreEnvironment(name, previousValue) {
+  if (previousValue === undefined) delete process.env[name];
+  else process.env[name] = previousValue;
+}
+
+function sleep(milliseconds) {
+  return new Promise((resolveSleep) => setTimeout(resolveSleep, milliseconds));
+}

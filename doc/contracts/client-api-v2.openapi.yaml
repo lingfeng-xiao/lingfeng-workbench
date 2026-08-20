@@ -1,0 +1,373 @@
+openapi: 3.1.0
+info:
+  title: lingfeng-workbench Client API v2
+  version: 2.0.0
+  description: Strict client contract for trusted creators, Hermes, and the private read-only Web projection.
+  license: { name: Proprietary, identifier: LicenseRef-Proprietary }
+servers:
+  - url: /api/client/v2
+security:
+  - bearerAuth: []
+paths:
+  /work-items:
+    post:
+      operationId: createWorkItemWithMissionV2
+      summary: Atomically create a WorkItem, immutable Mission, Run, and START_RUN command
+      x-required-scope: work-items:create
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        x-max-body-bytes: 65536
+        content:
+          application/json: { schema: { $ref: '#/components/schemas/CreateWorkItemRequest' } }
+      responses:
+        '201': { description: Created or idempotently replayed, content: { application/json: { schema: { $ref: '#/components/schemas/CreatedWorkItem' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+    get:
+      operationId: listWorkItemsV2
+      summary: List bounded short control projections
+      x-required-scope: read
+      parameters: [{ $ref: '#/components/parameters/Limit' }]
+      responses:
+        '200': { description: WorkItems, content: { application/json: { schema: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/WorkItemSummary' } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /work-items/{workItemId}:
+    get:
+      operationId: getWorkItemV2
+      summary: Get one bounded WorkItem control projection
+      x-required-scope: read
+      parameters: [{ $ref: '#/components/parameters/WorkItemId' }]
+      responses:
+        '200': { description: WorkItem detail, content: { application/json: { schema: { $ref: '#/components/schemas/WorkItemDetail' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /interactions:
+    get:
+      operationId: listInteractionsV2
+      summary: List short read-only Interaction projections
+      x-required-scope: read
+      parameters:
+        - name: state
+          in: query
+          schema: { $ref: '#/components/schemas/InteractionState' }
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200': { description: Interactions, content: { application/json: { schema: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/InteractionSummary' } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /interactions/{interactionId}/resolution:
+    post:
+      operationId: resolveInteractionV2
+      summary: Idempotently resolve an exactly-bound Interaction
+      x-required-scope: interactions:resolve
+      parameters:
+        - $ref: '#/components/parameters/InteractionId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        x-max-body-bytes: 65536
+        content:
+          application/json: { schema: { $ref: '#/components/schemas/ResolveInteractionRequest' } }
+      responses:
+        '200': { description: Resolved or idempotently replayed, content: { application/json: { schema: { $ref: '#/components/schemas/InteractionResolution' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+  /notifications/poll:
+    post:
+      operationId: pollNotificationV2
+      summary: Lease at most one notification for Hermes
+      x-required-scope: notifications:pull
+      requestBody:
+        required: true
+        x-max-body-bytes: 65536
+        content:
+          application/json: { schema: { $ref: '#/components/schemas/NotificationPollRequest' } }
+      responses:
+        '200':
+          description: At most one leased notification
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: '#/components/schemas/NoNotification' }
+                  - { $ref: '#/components/schemas/NotificationLease' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+  /notifications/{notificationId}/delivery-events:
+    post:
+      operationId: reportNotificationDeliveryV2
+      summary: Idempotently report a Hermes delivery outcome
+      x-required-scope: notifications:report
+      parameters:
+        - $ref: '#/components/parameters/NotificationId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        x-max-body-bytes: 65536
+        content:
+          application/json: { schema: { $ref: '#/components/schemas/NotificationDeliveryEvent' } }
+      responses:
+        '200': { description: Accepted or idempotently replayed, content: { application/json: { schema: { $ref: '#/components/schemas/NotificationDeliveryAck' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+  /nodes:
+    get:
+      operationId: listNodesV2
+      summary: List bounded Node liveness projections
+      x-required-scope: read
+      responses:
+        '200': { description: Nodes, content: { application/json: { schema: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/NodeSummary' } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer }
+  parameters:
+    IdempotencyKey: { name: Idempotency-Key, in: header, required: true, schema: { $ref: '#/components/schemas/Identifier' } }
+    Limit: { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+    WorkItemId: { name: workItemId, in: path, required: true, schema: { $ref: '#/components/schemas/WorkItemId' } }
+    InteractionId: { name: interactionId, in: path, required: true, schema: { $ref: '#/components/schemas/InteractionId' } }
+    NotificationId: { name: notificationId, in: path, required: true, schema: { $ref: '#/components/schemas/NotificationId' } }
+  responses:
+    BadRequest: { description: Malformed or unsupported request, content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+    Unauthorized: { description: Missing or invalid credential, content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+    Forbidden: { description: Credential lacks the required scope, content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+    NotFound: { description: Entity not found, content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+    Conflict: { description: 'Binding, state, or idempotency conflict', content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+    PayloadTooLarge: { description: Encoded message exceeds 64 KiB, content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+  schemas:
+    Identifier: { type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' }
+    WorkItemId: { type: string, pattern: '^wi_[A-Za-z0-9]+$' }
+    MissionId: { type: string, pattern: '^mi_[A-Za-z0-9]+$' }
+    RunId: { type: string, pattern: '^run_[A-Za-z0-9]+$' }
+    InteractionId: { type: string, pattern: '^int_[A-Za-z0-9]+$' }
+    NotificationId: { type: string, pattern: '^ntf_[A-Za-z0-9]+$' }
+    Digest: { type: string, pattern: '^[a-f0-9]{64}$' }
+    Timestamp: { type: string, format: date-time }
+    ShortText: { type: string, minLength: 1, maxLength: 800 }
+    WorkItemStatus: { type: string, enum: [open, in_progress, completed, attention_required, cancelled] }
+    MissionStatus: { type: string, enum: [assigned, running, waiting_interaction, completed, failed, interrupted, uncertain, cancelled] }
+    RunStatus: { type: string, enum: [assigned, running, waiting_interaction, cancelling, completed, failed, interrupted, uncertain, cancelled] }
+    InteractionState: { type: string, enum: [pending, resolved, delivered, consumed, expired, cancelled] }
+    NotificationStatus: { type: string, enum: [pending, leased, delivered, dead_letter] }
+    NotificationType: { type: string, enum: [INTERACTION_REQUIRED, RUN_COMPLETED, RUN_FAILED, RUN_UNCERTAIN, NODE_OFFLINE_WITH_ACTIVE_RUN] }
+    Decision: { type: string, enum: [APPROVE, REJECT, PROVIDE_INPUT] }
+    CreateWorkItemRequest:
+      type: object
+      additionalProperties: false
+      required: [title, objective, acceptanceSummary, authorizedSideEffectsSummary, targetNodeId, workspaceRef, runtimeKind, executionProfile, dataBoundaryAcknowledged]
+      properties:
+        title: { $ref: '#/components/schemas/ShortText' }
+        objective: { $ref: '#/components/schemas/ShortText' }
+        acceptanceSummary: { $ref: '#/components/schemas/ShortText' }
+        authorizedSideEffectsSummary: { $ref: '#/components/schemas/ShortText' }
+        targetNodeId: { $ref: '#/components/schemas/Identifier' }
+        workspaceRef: { $ref: '#/components/schemas/Identifier' }
+        runtimeKind: { $ref: '#/components/schemas/Identifier' }
+        executionProfile: { $ref: '#/components/schemas/Identifier' }
+        priority: { type: integer, minimum: -100, maximum: 100, default: 0 }
+        dataBoundaryAcknowledged: { type: boolean, const: true }
+    CreatedWorkItem:
+      type: object
+      additionalProperties: false
+      required: [workItemId, missionId, runId, missionRevision, missionDigest, createdAt]
+      properties:
+        workItemId: { $ref: '#/components/schemas/WorkItemId' }
+        missionId: { $ref: '#/components/schemas/MissionId' }
+        runId: { $ref: '#/components/schemas/RunId' }
+        missionRevision: { type: integer, minimum: 1 }
+        missionDigest: { $ref: '#/components/schemas/Digest' }
+        createdAt: { $ref: '#/components/schemas/Timestamp' }
+    WorkItemSummary:
+      type: object
+      additionalProperties: false
+      required: [workItemId, title, status, priority, updatedAt]
+      properties:
+        workItemId: { $ref: '#/components/schemas/WorkItemId' }
+        title: { $ref: '#/components/schemas/ShortText' }
+        status: { $ref: '#/components/schemas/WorkItemStatus' }
+        priority: { type: integer, minimum: -100, maximum: 100 }
+        phaseCode: { $ref: '#/components/schemas/Identifier' }
+        progressSummary: { $ref: '#/components/schemas/ShortText' }
+        waitingInteractionCount: { type: integer, minimum: 0 }
+        lastSyncedAt: { $ref: '#/components/schemas/Timestamp' }
+        updatedAt: { $ref: '#/components/schemas/Timestamp' }
+    WorkItemDetail:
+      type: object
+      additionalProperties: false
+      required: [workItemId, title, status, priority, mission, run, interactions, notifications, timeline, updatedAt]
+      properties:
+        workItemId: { $ref: '#/components/schemas/WorkItemId' }
+        title: { $ref: '#/components/schemas/ShortText' }
+        status: { $ref: '#/components/schemas/WorkItemStatus' }
+        priority: { type: integer, minimum: -100, maximum: 100 }
+        mission: { $ref: '#/components/schemas/MissionProjection' }
+        run: { $ref: '#/components/schemas/RunProjection' }
+        interactions: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/InteractionSummary' } }
+        notifications: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/NotificationProjection' } }
+        timeline: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/TimelineEvent' } }
+        updatedAt: { $ref: '#/components/schemas/Timestamp' }
+    MissionProjection:
+      type: object
+      additionalProperties: false
+      required: [missionId, revision, objective, acceptanceSummary, status]
+      properties:
+        missionId: { $ref: '#/components/schemas/MissionId' }
+        revision: { type: integer, minimum: 1 }
+        objective: { $ref: '#/components/schemas/ShortText' }
+        acceptanceSummary: { $ref: '#/components/schemas/ShortText' }
+        status: { $ref: '#/components/schemas/MissionStatus' }
+    RunProjection:
+      type: object
+      additionalProperties: false
+      required: [runId, nodeId, status, resumable, lastSyncedAt]
+      properties:
+        runId: { $ref: '#/components/schemas/RunId' }
+        nodeId: { $ref: '#/components/schemas/Identifier' }
+        status: { $ref: '#/components/schemas/RunStatus' }
+        phaseCode: { $ref: '#/components/schemas/Identifier' }
+        progressSummary: { $ref: '#/components/schemas/ShortText' }
+        resultSummary: { $ref: '#/components/schemas/ShortText' }
+        resumable: { type: boolean }
+        lastSyncedAt: { $ref: '#/components/schemas/Timestamp' }
+    InteractionSummary:
+      type: object
+      additionalProperties: false
+      required: [interactionId, runId, checkpointId, state, promptSummary, allowedDecisions, createdAt]
+      properties:
+        interactionId: { $ref: '#/components/schemas/InteractionId' }
+        runId: { $ref: '#/components/schemas/RunId' }
+        checkpointId: { $ref: '#/components/schemas/Identifier' }
+        state: { $ref: '#/components/schemas/InteractionState' }
+        promptSummary: { $ref: '#/components/schemas/ShortText' }
+        allowedDecisions: { type: array, minItems: 1, maxItems: 3, uniqueItems: true, items: { $ref: '#/components/schemas/Decision' } }
+        responseSummary: { $ref: '#/components/schemas/ShortText' }
+        resolvedAt: { $ref: '#/components/schemas/Timestamp' }
+        consumedAt: { $ref: '#/components/schemas/Timestamp' }
+        createdAt: { $ref: '#/components/schemas/Timestamp' }
+    ResolveInteractionRequest:
+      type: object
+      additionalProperties: false
+      required: [interactionId, runId, checkpointId, missionDigest, decision, responseSummary, resolvedBy, resolvedAt]
+      properties:
+        interactionId: { $ref: '#/components/schemas/InteractionId' }
+        runId: { $ref: '#/components/schemas/RunId' }
+        checkpointId: { $ref: '#/components/schemas/Identifier' }
+        missionDigest: { $ref: '#/components/schemas/Digest' }
+        decision: { $ref: '#/components/schemas/Decision' }
+        responseSummary: { $ref: '#/components/schemas/ShortText' }
+        resolvedBy: { $ref: '#/components/schemas/Identifier' }
+        resolvedAt: { $ref: '#/components/schemas/Timestamp' }
+    InteractionResolution:
+      type: object
+      additionalProperties: false
+      required: [interactionId, state, commandId, duplicate, resolvedAt]
+      properties:
+        interactionId: { $ref: '#/components/schemas/InteractionId' }
+        state: { type: string, const: resolved }
+        commandId: { $ref: '#/components/schemas/Identifier' }
+        duplicate: { type: boolean }
+        resolvedAt: { $ref: '#/components/schemas/Timestamp' }
+    NotificationPollRequest:
+      type: object
+      additionalProperties: false
+      required: [requestId, targetAlias, sentAt]
+      properties:
+        requestId: { $ref: '#/components/schemas/Identifier' }
+        targetAlias: { type: string, const: owner }
+        sentAt: { $ref: '#/components/schemas/Timestamp' }
+    NoNotification:
+      type: object
+      additionalProperties: false
+      required: [notificationAvailable]
+      properties: { notificationAvailable: { type: boolean, const: false } }
+    NotificationLease:
+      type: object
+      additionalProperties: false
+      required: [notificationAvailable, notificationId, notificationType, targetAlias, workItemId, title, messageSummary, createdAt, attempt, leaseExpiresAt]
+      properties:
+        notificationAvailable: { type: boolean, const: true }
+        notificationId: { $ref: '#/components/schemas/NotificationId' }
+        notificationType: { $ref: '#/components/schemas/NotificationType' }
+        targetAlias: { type: string, const: owner }
+        workItemId: { $ref: '#/components/schemas/WorkItemId' }
+        missionId: { $ref: '#/components/schemas/MissionId' }
+        runId: { $ref: '#/components/schemas/RunId' }
+        interactionId: { $ref: '#/components/schemas/InteractionId' }
+        title: { $ref: '#/components/schemas/ShortText' }
+        messageSummary: { $ref: '#/components/schemas/ShortText' }
+        createdAt: { $ref: '#/components/schemas/Timestamp' }
+        attempt: { type: integer, minimum: 1 }
+        leaseExpiresAt: { $ref: '#/components/schemas/Timestamp' }
+    NotificationDeliveryEvent:
+      type: object
+      additionalProperties: false
+      required: [deliveryEventId, notificationId, outcome, reportedAt]
+      properties:
+        deliveryEventId: { $ref: '#/components/schemas/Identifier' }
+        notificationId: { $ref: '#/components/schemas/NotificationId' }
+        outcome: { type: string, enum: [DELIVERED, FAILED] }
+        failureSummary: { $ref: '#/components/schemas/ShortText' }
+        reportedAt: { $ref: '#/components/schemas/Timestamp' }
+    NotificationDeliveryAck:
+      type: object
+      additionalProperties: false
+      required: [notificationId, status, duplicate]
+      properties:
+        notificationId: { $ref: '#/components/schemas/NotificationId' }
+        status: { $ref: '#/components/schemas/NotificationStatus' }
+        duplicate: { type: boolean }
+    NotificationProjection:
+      type: object
+      additionalProperties: false
+      required: [notificationId, notificationType, status, createdAt]
+      properties:
+        notificationId: { $ref: '#/components/schemas/NotificationId' }
+        notificationType: { $ref: '#/components/schemas/NotificationType' }
+        status: { $ref: '#/components/schemas/NotificationStatus' }
+        createdAt: { $ref: '#/components/schemas/Timestamp' }
+    TimelineEvent:
+      type: object
+      additionalProperties: false
+      required: [eventId, eventType, createdAt]
+      properties:
+        eventId: { $ref: '#/components/schemas/Identifier' }
+        eventType: { $ref: '#/components/schemas/Identifier' }
+        summary: { $ref: '#/components/schemas/ShortText' }
+        createdAt: { $ref: '#/components/schemas/Timestamp' }
+    NodeSummary:
+      type: object
+      additionalProperties: false
+      required: [nodeId, displayName, status, capabilities, lastHeartbeatAt, lastSyncedAt]
+      properties:
+        nodeId: { $ref: '#/components/schemas/Identifier' }
+        displayName: { $ref: '#/components/schemas/ShortText' }
+        status: { type: string, enum: [online, offline] }
+        capabilities: { type: array, maxItems: 32, uniqueItems: true, items: { $ref: '#/components/schemas/Identifier' } }
+        currentRunId: { $ref: '#/components/schemas/RunId' }
+        lastHeartbeatAt: { $ref: '#/components/schemas/Timestamp' }
+        lastSyncedAt: { $ref: '#/components/schemas/Timestamp' }
+    ApiError:
+      type: object
+      additionalProperties: false
+      required: [code, message, requestId]
+      properties:
+        code: { $ref: '#/components/schemas/Identifier' }
+        message: { $ref: '#/components/schemas/ShortText' }
+        requestId: { $ref: '#/components/schemas/Identifier' }

@@ -14,6 +14,16 @@ workbench:
     state-directory: ${WORKBENCH_NODE_STATE_DIR:./state}
     poll-interval: ${WORKBENCH_NODE_POLL_INTERVAL:PT5S}
     request-timeout: ${WORKBENCH_NODE_REQUEST_TIMEOUT:PT20S}
+    heartbeat-interval: ${WORKBENCH_NODE_HEARTBEAT_INTERVAL:PT15S}
+    connect-timeout: ${WORKBENCH_NODE_CONNECT_TIMEOUT:PT10S}
+    backoff-initial: ${WORKBENCH_NODE_BACKOFF_INITIAL:PT1S}
+    backoff-maximum: ${WORKBENCH_NODE_BACKOFF_MAXIMUM:PT30S}
+    proxy-uri: ${WORKBENCH_NODE_PROXY_URI:}
+    proxy-password-file: ${WORKBENCH_NODE_PROXY_PASSWORD_FILE:}
+    trust-store: ${WORKBENCH_NODE_TRUST_STORE:}
+    trust-store-password-file: ${WORKBENCH_NODE_TRUST_STORE_PASSWORD_FILE:}
     runtime-kind: ${WORKBENCH_RUNTIME_KIND:ws}
     ws-executable: ${WORKBENCH_WS_EXECUTABLE:ws}
+    fake-scenario: ${WORKBENCH_FAKE_SCENARIO:FLOW}
+    fake-turn-delay: ${WORKBENCH_FAKE_TURN_DELAY:PT0.1S}
     workspaces: {}
