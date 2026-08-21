@@ -1,126 +1,71 @@
 ---
 status: authoritative
-authority: DF-0.3-control-loop
-source_ref: workflow-v2
+authority: DF-0.5-trusted-loop
+source_ref: workflow-v3
 owner: architecture
 superseded_by: null
-last_verified: 2026-08-20
+last_verified: 2026-08-21
 ---
 
-# 业务流程与两个闭环
+# 当前业务与执行闭环
 
-## 1. 权威关系
-
-Service 是任务控制状态的权威来源；工作电脑 `SPM/xlf` 是完整过程资料和产物的本地权威。两者通过稳定 ID 和短 checkpoint 对齐，但不复制完整内容。
-
-- WorkItem：一个需要交付的 SPM 事项；
-- Mission：本次执行不可静默修改的合同；
-- Run：Mission 的一次执行；
-- Agent Session：Node 本地的一段持续 Agent 会话；
-- message：OpenCode 会话中的原生输入与输出；
-- Interaction：需要可信客户端或人的精确输入；
-- Notification：Service 产生、Hermes 投递的消息意图，不是新的业务聚合。
-
-## 2. 工作流闭环
+## 1. Task 主流程
 
 ```text
-任务创建
-  -> Mission 合同冻结
-  -> Service 为目标 Node 建立 START_RUN 命令
-  -> Node pull、落盘、ACK
-  -> Node 打开 Agent Session
-  -> Node 异步提交一次 Mission prompt
-  -> Agent 在原生 Session 内执行
-       -> 理解任务和读取 xlf
-       -> 冻结源码与需求上下文
-       -> 实现
-       -> Maven/Newman/专项验证
-       -> 生成本地报告
-  -> 必要时 WAITING_INTERACTION 并恢复同一 Session
-  -> OpenCode Session 收敛到 idle，Node 对账 status/messages/evidence
-  -> 独立 AcceptanceEvaluator 核验 Mission
-  -> Node 本地保存完整证据并上报短终态
-  -> Service 依据 PASSED/FAILED/UNKNOWN 汇总状态
-  -> Web 和 Hermes 读取一致结果
+create DRAFT
+-> edit
+-> READY
+-> explicit start
+-> IN_PROGRESS
+-> Run completed + Node acceptance PASSED
+-> REVIEW/PENDING
+-> human accept -> DONE/ACCEPTED -> ARCHIVED
+                  or
+   request changes -> READY -> new WorkItem/Mission/Run
 ```
 
-`executionProfile=spm-change-v1` 由 Runtime Adapter/Agent 解释。Service 和 Node 只看到阶段代码和短摘要，不固化 `xlf` 的目录结构，也不把旧文件夹状态反向推断成业务状态。
+创建、编辑和 READY 不启动 WS。每次显式 start 在一个事务中冻结 Task version，创建新的 WorkItem、Mission、Run 和 `START_RUN` command；幂等键重放不能创建第二个执行。Run 失败、取消或不确定不会进入 REVIEW，只产生 attention 并保留重试入口。
 
-建议的本地阶段投影为：
+## 2. Node 与 WS 执行流程
 
 ```text
-CONTRACT_REVIEW
-CONTEXT_FREEZE
-IMPLEMENTATION
-BUILD_VALIDATION
-API_VALIDATION
-REPORTING
+Node poll START_RUN
+-> validate target/digest/size
+-> durable command + ACK
+-> resolve workspaceRef/contextRefs locally
+-> health/version/capability Gate
+-> create one OpenCode Session
+-> persist run/session/server/workspace binding
+-> subscribe SSE
+-> submit one Mission prompt_async
+-> observe busy/retry/message/tool/permission/question
+-> reconcile status/messages/pending interactions
+-> explicit idle or completed non-tool-call assistant message
+-> seal local evidence
+-> execute trusted local acceptance profile
+-> report short terminal projection
 ```
 
-阶段只是观察投影，不是 Service 完成条件。不同 Runtime 可以产生更多本地子阶段，但上报 Service 时必须映射成短、稳定的 `phaseCode`。
+Runtime idle 与 acceptance 是两个独立事实。assistant 文本、HTTP 204、Session 存在、超时或 status map 缺项都不能单独完成 Run。验收 profile 未配置、无法启动或超时时返回 UNKNOWN；exit 非零或必需产物缺失返回 FAILED；只有 exit 0 且全部必需产物存在才返回 PASSED。
 
-## 3. 24 小时运行规则
+## 3. Interaction 与取消
 
-- Node 随 Windows 启动，网络循环与 Agent 执行线程隔离；
-- 网络断开不取消已授权且正在运行的 Agent；事件进入本地 outbox；
-- Node 重启后先读取本地 Run、Session handle、命令日志和 outbox；
-- Adapter 明确声明可恢复且 handle 匹配时才恢复原 Session；
-- 无法证明原 Session 身份时上报 `uncertain`，不自动再开一个 Session；
-- Interaction 等待期间保留 Session/checkpoint，不把请求解释为失败；
-- 同一工作区首轮只允许一个活动 Run，避免文件副作用竞争；
-- 取消、idle/验收结果和 Interaction 响应都进入 RunSupervisor 的单一串行事件流。
+permission/question 由 Node 映射为 Service 的短 Interaction；完整请求和回答仍只留 Node。用户响应经 Service durable command 重投，Node 落盘 ACK 后调用同一 Session 的原生 reply/reject，并在上游成功后报告 consumed。重复 resolve、command、ACK 或上游事件不能产生第二次回复。
 
-## 4. 通知与审批闭环
+取消由 Service 创建 `CANCEL_RUN`，Node 落盘后调用原生 `session.abort`。abort 失败或结果无法确认时进入 uncertain，不以杀 CLI 进程代替。
+
+## 4. 通知流程
 
 ```text
-Run/Interaction 发生需要通知的状态转换
-  -> Service 同事务写 notification outbox
-  -> Hermes 使用 scoped credential 主动 pull
-  -> Hermes 按 notificationId 幂等发送微信
-  -> Hermes 回报 DELIVERED 或 FAILED
-  -> 用户回复批准/拒绝/输入
-  -> Hermes 调用 Interaction resolve
-  -> Service 持久化响应并建立 PROVIDE_INTERACTION_RESPONSE 命令
-  -> Node pull，先本地持久化，再 ACK
-  -> Node 投递给同一 Agent Session
-  -> Agent 继续执行
-  -> Node 上报 RESPONSE_CONSUMED 和后续状态
+Service state change
+-> transactional notification outbox
+-> authorized client polls one notification
+-> external delivery by notificationId
+-> delivery event returned to Service
 ```
 
-Interaction 精确绑定：
+通知投递与用户批准、Node 消费是三个独立状态。Service 不保存外部渠道 token 或完整回复正文；Hermes 等外部适配器不得绕过 Service 直接控制 Node。
 
-```text
-interactionId + runId + checkpointId + missionDigest + targetNodeId
-```
+## 5. Web 流程
 
-响应还包含 `decision`、最多 800 字符的 `responseSummary`、`resolvedBy` 和 `resolvedAt`。任一绑定、状态或目标 Node 不匹配都 fail closed，且不得消费响应。
-
-Hermes 负责微信用户映射、消息格式和渠道重试；Service 只保存逻辑目标 `owner` 和投递结果，不保存微信 token、联系人详情或会话内容。Hermes ACK 不能代表用户已批准，Interaction resolve 也不能代表 Node 已消费；这三步必须分别记录。
-
-## 5. 通知类型
-
-首轮只产生高价值通知：
-
-- `INTERACTION_REQUIRED`；
-- `RUN_COMPLETED`；
-- `RUN_FAILED`；
-- `RUN_UNCERTAIN`；
-- `NODE_OFFLINE_WITH_ACTIVE_RUN`。
-
-普通 progress 不发送微信，避免高频噪声。相同 `eventId + notificationType + target` 只产生一个通知；离线告警需要冷却时间，恢复后可产生一条恢复时间线，但首轮不要求微信通知。
-
-## 6. Web 观察闭环
-
-Web 只读展示：WorkItem 汇总、当前 Mission/Run 状态、最新阶段和进度、等待中的 Interaction、Node 在线情况以及重要通知的投递投影。Web 不读取 xlf、完整报告或 Runtime 对话，也不提供批准按钮。
-
-Web 看到的是 Service 已持久化的状态；Node 尚未同步的本地进度明确显示为“最后同步于”，不得伪装为实时流。
-
-## 7. 两个端到端验收
-
-### E2E-FLOW
-
-创建 SPM Mission，Node 通过 fake Runtime 向一个 Session 提交一次 prompt，中间断开 Service 网络后继续运行并重放事件，再由独立 fake AcceptanceEvaluator 产生 `PASSED`。Service 和 Web 显示 completed；完整对话、Session、路径、diff 和报告只存在 Node。
-
-### E2E-NOTIFY
-
-fake Runtime 请求 Interaction，Node 保留 Session；Service 创建 Interaction 和通知；fake Hermes 拉取并确认投递，再用精确绑定 resolve；Service 重投直到 Node 本地保存并 ACK；同一 Session 恢复并完成。重复微信回复、重复 resolve、重复命令和重复 ACK 都不产生第二次副作用。
+浏览器只调用同源 BFF。读取使用只读 credential；Task mutation 使用单独写 credential，并要求 Sites 身份、同源校验、Fetch Metadata、CSRF header、`Idempotency-Key`、actor/reason 和已有对象的 `expectedVersion`。Web 以 ETag 条件轮询显示 Task/Run/Acceptance、attention、新鲜度和 Timeline，不读取 Node 原始证据。

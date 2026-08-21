@@ -1,6 +1,6 @@
 # Agent ownership
 
-- Read `doc/README.md`, `doc/architecture.md`, and both contracts before changing a module.
+- Read `doc/README.md`, `doc/architecture.md`, and all current contracts before changing a module.
 - `workbench-service` changes stay in `workbench-service/` and its module documentation.
 - `workbench-node` changes stay in `workbench-node/` and its module documentation.
 - `workbench-web` changes stay in `workbench-web/` and its module documentation.

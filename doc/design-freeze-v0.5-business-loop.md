@@ -211,7 +211,7 @@ Timeline 不是原始 WS 日志。它由 TaskEvent 和安全 Run 投影合成，
 
 ## 12. Supersede 与继续继承
 
-本冻结只 supersede 旧版本的以下产品限制：
+本冻结已废止旧版本的以下产品限制；这些内容不再是当前要求：
 
 - Web 永久只读；
 - 用户只能通过“创建 WorkItem 即启动”使用系统；
@@ -223,11 +223,11 @@ Timeline 不是原始 WS 日志。它由 TaskEvent 和安全 Run 投影合成，
 
 - Service 全局控制面、Node 本机控制面、Service 不回连 Node；
 - Node 只出站 HTTPS，浏览器不持有 Service credential、不连接 Node；
-- Mission revision/digest、Run/Session 分离、可信 terminal/AcceptanceEvaluator；
+- Mission revision/digest、Run/Session 分离、可信 Run terminal projection 与独立 AcceptanceEvaluator；
 - Node command 落盘 ACK、outbox、幂等、顺序和 fail closed；
 - 完整 Session、原始事件、路径、diff、日志和产物只留 Node；
 - ADR-003 的原生 OpenCode Runtime 路径；
-- D1/R2 为 `null`，Bridge/delegate-to-ws 废弃，旧 Python/旧 D1 不自动删除。
+- D1/R2 为 `null`，Bridge/delegate-to-ws 废弃；旧 Python 已在独立清理 Gate 下从当前树删除，旧 D1 和其它外部资产仍不自动删除。
 
 ## 13. P1 客观验收场景
 

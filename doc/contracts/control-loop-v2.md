@@ -1,10 +1,10 @@
 ---
 status: authoritative
-authority: DF-0.3-control-loop
-source_ref: control-loop-v2-semantic-contract
+authority: DF-0.5-trusted-loop
+source_ref: control-loop-v2-current
 owner: architecture
 superseded_by: null
-last_verified: 2026-08-20
+last_verified: 2026-08-21
 ---
 
 # Control Loop v2 跨模块语义合同
@@ -74,7 +74,7 @@ Node 事件先进入本地 outbox，Service 返回包含 `requestMessageId` 和 
 - `INTERACTION_RESPONSE_CONSUMED`：同一 Session 已接受响应，对应 Interaction 进入 consumed；
 - `RUN_TERMINAL`：`runtimeOutcome`、`acceptanceStatus`、`resultSummary`、`resumable=false`。
 
-高频 tool call、文件变化、token、stdout/stderr 和 Turn 事件不进入 Node Protocol。
+高频 tool call、文件变化、token、stdout/stderr 和 Runtime message 事件不进入 Node Protocol。
 
 ## 4. Interaction 状态
 
@@ -111,7 +111,7 @@ notifications:pull
 notifications:report
 ```
 
-Sites credential 始终只有 read scope。
+Web BFF 使用分离的 Task read/write credential；浏览器不持有任何 Service credential。Client API v2 的 Sites 兼容读取 credential 仍只有 read scope。
 
 Notification poll 最多返回一项，包含：
 
@@ -123,9 +123,9 @@ title, messageSummary, createdAt, attempt
 
 Hermes 以 `notificationId` 去重，并回报 `DELIVERED` 或 `FAILED`。Service 的投递状态为 `pending / leased / delivered / dead_letter`；租约超时可重投，失败达到有界次数后进入 dead letter。Service 不保存微信用户 ID、微信 token 或完整回复文本。
 
-## 6. Node 到 Runtime 的本地会话合同
+## 6. Node 到 Runtime 的本地会话边界
 
-本小节已由 ADR-003 取代；Service→Node 的 HTTP 字段和事件集合不变。Node 内部不得再用固定 Turn 或模型输出 terminal 文本实现这些投影。
+具体决定见 ADR-003。Service→Node 的 HTTP 字段和事件集合不包含 OpenCode DTO、Session ID 或原始事件；Node 不得用固定 Turn 或模型输出 terminal 文本实现这些投影。
 
 该合同不通过 HTTP，不进入 OpenAPI。Node SPI 提供异步命令：
 
@@ -176,29 +176,23 @@ waiting_interaction, resuming, cancelling,
 completed, failed, interrupted, uncertain
 ```
 
-Agent Session 状态：
+Agent Session 本地状态：
 
 ```text
-opening, open, paused, closing, closed, lost
+opening, idle, busy, retry, waiting_interaction,
+error, aborted, closing, closed, lost
 ```
 
-Turn 状态：
-
-```text
-submitted, accepted, running, waiting_input,
-finished, failed, interrupted
-```
-
-Service 不保存 Session/Turn 状态；只保存 Run 和 `resumable` 投影。
+Service 不保存 Session 状态；只保存 Run 和 `resumable` 投影。
 
 ## 8. 顺序与竞争
 
 - Node 为每个 Run 分配单调递增 `localSequence`，将命令、Runtime 事件和定时器放入同一串行队列；
 - 第一个本地持久化的合法终态关闭 Run，之后事件不改变结果；
-- CANCEL_RUN 先落盘时，Node 不再提交新 Turn，并尽力取消 Runtime；
+- CANCEL_RUN 先落盘时，Node 不再提交新 prompt/message，并调用原生 Session abort；
 - 可信 PASSED 终态先落盘时，之后的取消只作为迟到命令 ACK，不覆盖完成；
 - Service 仍依据自身状态机和幂等记录做最终校验，拒绝不可能的转换。
 
 ## 9. OpenAPI 编码要求
 
-`client-api-v2.openapi.yaml` 和 `node-protocol-v2.openapi.yaml` 是当前唯一 HTTP 合同。OpenAPI 必须表达上述必填字段、严格对象、枚举、scope、大小边界、冲突响应和示例 fixtures；语义冲突时以本文件和冻结 ADR 为准，先修订冻结版本再继续实现。
+`task-api-v1.openapi.yaml`、`client-api-v2.openapi.yaml` 和 `node-protocol-v2.openapi.yaml` 是当前 HTTP 合同。OpenAPI 必须表达上述必填字段、严格对象、枚举、scope、大小边界、冲突响应和示例 fixtures；语义冲突时以本文件和冻结 ADR 为准，先修订冻结版本再继续实现。

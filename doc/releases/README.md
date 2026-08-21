@@ -19,7 +19,7 @@ GitHub Release 只发布已经存在的不可变 `v*` 标签。候选版使用�
 
 - Java 21 Maven reactor 的完整 `verify`，覆盖 Service 与 Node 测试；
 - Web 锁定依赖安装、lint、生产构建测试和生产依赖审计；
-- 两个版本化 OpenAPI 合同的严格 lint；
+- 三个版本化 OpenAPI 合同的严格 lint；
 - Service 与 Node 在 Windows 上的 Maven Wrapper smoke。
 
 CI 只验证仓库内容，不持有服务器、Sites、Hermes 或 Node credential，也不访问生产数据。
@@ -36,7 +36,7 @@ GitHub Release 成功不自动授权或触发以下动作：
 - 个人服务器部署或凭证变更；
 - Sites 发布、访问策略变更或 D1/R2 操作；
 - 公司电脑 Node 安装、升级或 Runtime 登录；
-- 遗留 Python、旧 D1、远端分支或其它外部资产删除。
+- 旧 D1、远端分支、已安装程序或其它外部资产删除。
 
 上述动作继续使用独立 Gate，并在执行前核对精确 tag、提交 SHA、构建产物 SHA-256 和目标环境。
 

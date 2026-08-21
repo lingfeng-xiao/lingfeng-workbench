@@ -326,7 +326,7 @@ async function runFlowScenario(scenarioDirectory) {
   await Promise.all([mkdir(serviceState), mkdir(nodeState), mkdir(workspace)]);
   const serviceDatabase = join(serviceState, "service.db");
   let service = await startService({ scenarioDirectory, serviceDatabase, port });
-  let node = await startNode({ scenarioDirectory, nodeState, workspace, port, scenario: "FLOW", turnDelay: "PT2S" });
+  let node = await startNode({ scenarioDirectory, nodeState, workspace, port, scenario: "FLOW", eventDelay: "PT2S" });
 
   try {
     await waitForNodeRegistration(port);
@@ -421,7 +421,7 @@ async function runTaskBusinessLoopScenario(scenarioDirectory) {
     workspace,
     port,
     scenario: "FLOW",
-    turnDelay: "PT0.5S",
+    eventDelay: "PT0.5S",
   });
 
   try {
@@ -565,7 +565,7 @@ async function runNotificationScenario(scenarioDirectory) {
   await Promise.all([mkdir(serviceState), mkdir(nodeState), mkdir(workspace)]);
   const serviceDatabase = join(serviceState, "service.db");
   let service = await startService({ scenarioDirectory, serviceDatabase, port });
-  let node = await startNode({ scenarioDirectory, nodeState, workspace, port, scenario: "INTERACTION", turnDelay: "PT0.5S" });
+  let node = await startNode({ scenarioDirectory, nodeState, workspace, port, scenario: "INTERACTION", eventDelay: "PT0.5S" });
 
   try {
     await waitForNodeRegistration(port);
@@ -790,7 +790,7 @@ async function startNode({
   workspace,
   port,
   scenario,
-  turnDelay,
+  eventDelay,
   runtimeKind = "fake-session",
   wsBaseUri,
   wsExpectedVersion,
@@ -836,7 +836,7 @@ async function startNode({
     ] : []),
     ...(runtimeKind === "fake-session" ? [
       `--workbench.node.fake-scenario=${scenario}`,
-      `--workbench.node.fake-turn-delay=${turnDelay}`,
+      `--workbench.node.fake-event-delay=${eventDelay}`,
     ] : []),
     `--workbench.node.trust-store=${tls.trustStore}`,
     `--workbench.node.trust-store-password-file=${tls.trustStorePasswordFile}`,
