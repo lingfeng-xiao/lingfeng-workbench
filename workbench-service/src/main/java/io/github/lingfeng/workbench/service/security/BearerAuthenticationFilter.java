@@ -50,14 +50,19 @@ class BearerAuthenticationFilter extends OncePerRequestFilter {
           case CREATOR ->
               List.of(
                   new SimpleGrantedAuthority("V2_CREATE"),
-                  new SimpleGrantedAuthority("CLIENT_READ"));
+                  new SimpleGrantedAuthority("CLIENT_READ"),
+                  new SimpleGrantedAuthority("TASK_READ"),
+                  new SimpleGrantedAuthority("TASK_WRITE"));
           case HERMES ->
               List.of(
                   new SimpleGrantedAuthority("CLIENT_READ"),
                   new SimpleGrantedAuthority("INTERACTION_RESOLVE"),
                   new SimpleGrantedAuthority("NOTIFICATION_PULL"),
                   new SimpleGrantedAuthority("NOTIFICATION_REPORT"));
-          case SITES -> List.of(new SimpleGrantedAuthority("CLIENT_READ"));
+          case SITES ->
+              List.of(
+                  new SimpleGrantedAuthority("CLIENT_READ"),
+                  new SimpleGrantedAuthority("TASK_READ"));
           case NODE -> List.of(new SimpleGrantedAuthority("NODE"));
         };
     SecurityContextHolder.getContext()

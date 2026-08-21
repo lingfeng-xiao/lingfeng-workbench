@@ -2,8 +2,9 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 
 const NAVIGATION = [
-  { href: "/", label: "概览" },
-  { href: "/interactions", label: "输入记录" },
+  { href: "/", label: "Tasks" },
+  { href: "/attention", label: "需关注" },
+  { href: "/interactions", label: "执行记录" },
   { href: "/nodes", label: "执行节点" },
 ] as const;
 
@@ -43,7 +44,7 @@ export function AppShell({
         </nav>
         <div className="privacy-mark" title="由 Sites 私有访问策略保护">
           <span aria-hidden="true" />
-          私有只读
+          私有控制面
         </div>
       </header>
 

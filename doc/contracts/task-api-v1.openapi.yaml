@@ -1,0 +1,418 @@
+openapi: 3.1.0
+info:
+  title: lingfeng-workbench Task API v1
+  version: 1.0.0
+  description: Versioned product contract for the Task-centered durable business loop.
+  license: { name: Proprietary, identifier: LicenseRef-Proprietary }
+servers:
+  - url: /api/tasks/v1
+security:
+  - bearerAuth: []
+paths:
+  /tasks:
+    post:
+      operationId: createTaskV1
+      summary: Create a DRAFT Task without starting execution
+      x-required-scope: task:write
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        x-max-body-bytes: 65536
+        content:
+          application/json: { schema: { $ref: '#/components/schemas/CreateTaskRequest' } }
+      responses:
+        '201': { description: Created or idempotently replayed, content: { application/json: { schema: { $ref: '#/components/schemas/CreatedTask' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+    get:
+      operationId: listTasksV1
+      summary: Query bounded Task control projections
+      x-required-scope: task:read
+      parameters:
+        - name: businessStatus
+          in: query
+          schema: { $ref: '#/components/schemas/BusinessStatus' }
+        - name: attentionState
+          in: query
+          schema: { $ref: '#/components/schemas/AttentionState' }
+        - name: targetNodeId
+          in: query
+          schema: { $ref: '#/components/schemas/Identifier' }
+        - name: includeArchived
+          in: query
+          schema: { type: boolean, default: false }
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200': { description: Tasks, content: { application/json: { schema: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/TaskSummary' } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /tasks/{taskId}:
+    get:
+      operationId: getTaskV1
+      summary: Read a Task, its Run history, and recent Timeline
+      x-required-scope: task:read
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+        - name: If-None-Match
+          in: header
+          schema: { type: string, maxLength: 64 }
+      responses:
+        '200':
+          description: Task detail
+          headers:
+            ETag: { schema: { type: string } }
+          content: { application/json: { schema: { $ref: '#/components/schemas/TaskDetail' } } }
+        '304': { description: Task version did not change }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      operationId: updateTaskV1
+      summary: Edit a DRAFT or READY Task without starting execution
+      x-required-scope: task:write
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        x-max-body-bytes: 65536
+        content: { application/json: { schema: { $ref: '#/components/schemas/UpdateTaskRequest' } } }
+      responses:
+        '200': { description: Updated or idempotently replayed, content: { application/json: { schema: { $ref: '#/components/schemas/TaskDetail' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+  /tasks/{taskId}/events:
+    get:
+      operationId: listTaskEventsV1
+      summary: Read append-only Task Timeline events after a sequence cursor
+      x-required-scope: task:read
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+        - name: afterSequence
+          in: query
+          schema: { type: integer, minimum: 0, default: 0 }
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200': { description: Events, content: { application/json: { schema: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/TaskEvent' } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /tasks/{taskId}/mark-ready:
+    post:
+      operationId: markTaskReadyV1
+      summary: Move DRAFT to READY
+      x-required-scope: task:write
+      parameters: [{ $ref: '#/components/parameters/TaskId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody: { $ref: '#/components/requestBodies/TaskAction' }
+      responses:
+        '200': { $ref: '#/components/responses/TaskActionSuccess' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+  /tasks/{taskId}/start:
+    post:
+      operationId: startTaskV1
+      summary: Atomically create a WorkItem, Mission, Run, and START_RUN command
+      x-required-scope: task:write
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        x-max-body-bytes: 65536
+        content: { application/json: { schema: { $ref: '#/components/schemas/TaskActionRequest' } } }
+      responses:
+        '200': { description: Started or idempotently replayed, content: { application/json: { schema: { $ref: '#/components/schemas/StartedTask' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+  /tasks/{taskId}/accept:
+    post:
+      operationId: acceptTaskV1
+      summary: Record delivery metadata and human acceptance
+      x-required-scope: task:write
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        x-max-body-bytes: 65536
+        content: { application/json: { schema: { $ref: '#/components/schemas/AcceptTaskRequest' } } }
+      responses:
+        '200': { description: Accepted or idempotently replayed, content: { application/json: { schema: { $ref: '#/components/schemas/TaskDetail' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+  /tasks/{taskId}/request-changes:
+    post:
+      operationId: requestTaskChangesV1
+      summary: Return REVIEW to READY
+      x-required-scope: task:write
+      parameters: [{ $ref: '#/components/parameters/TaskId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody: { $ref: '#/components/requestBodies/TaskAction' }
+      responses:
+        '200': { $ref: '#/components/responses/TaskActionSuccess' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+  /tasks/{taskId}/cancel:
+    post:
+      operationId: cancelTaskV1
+      summary: Cancel the business Task
+      x-required-scope: task:write
+      parameters: [{ $ref: '#/components/parameters/TaskId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody: { $ref: '#/components/requestBodies/TaskAction' }
+      responses:
+        '200': { $ref: '#/components/responses/TaskActionSuccess' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+  /tasks/{taskId}/archive:
+    post:
+      operationId: archiveTaskV1
+      summary: Reversibly archive DONE or CANCELLED
+      x-required-scope: task:write
+      parameters: [{ $ref: '#/components/parameters/TaskId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody: { $ref: '#/components/requestBodies/TaskAction' }
+      responses:
+        '200': { $ref: '#/components/responses/TaskActionSuccess' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+  /tasks/{taskId}/restore:
+    post:
+      operationId: restoreTaskV1
+      summary: Restore an archived Task
+      x-required-scope: task:write
+      parameters: [{ $ref: '#/components/parameters/TaskId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody: { $ref: '#/components/requestBodies/TaskAction' }
+      responses:
+        '200': { $ref: '#/components/responses/TaskActionSuccess' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer }
+  parameters:
+    TaskId: { name: taskId, in: path, required: true, schema: { $ref: '#/components/schemas/TaskId' } }
+    IdempotencyKey: { name: Idempotency-Key, in: header, required: true, schema: { $ref: '#/components/schemas/Identifier' } }
+    Limit: { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+  requestBodies:
+    TaskAction:
+      required: true
+      x-max-body-bytes: 65536
+      content: { application/json: { schema: { $ref: '#/components/schemas/TaskActionRequest' } } }
+  responses:
+    TaskActionSuccess: { description: Applied or idempotently replayed, content: { application/json: { schema: { $ref: '#/components/schemas/TaskDetail' } } } }
+    BadRequest: { description: Malformed or unsupported request, content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+    Unauthorized: { description: Missing or invalid credential, content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+    Forbidden: { description: Credential lacks required scope, content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+    NotFound: { description: Task not found, content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+    Conflict: { description: 'Idempotency, optimistic lock, or state conflict with current safe version summary', content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+    PayloadTooLarge: { description: Encoded request exceeds 64 KiB, content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+  schemas:
+    Identifier: { type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' }
+    TaskId: { type: string, pattern: '^task_[A-Za-z0-9]+$' }
+    WorkItemId: { type: string, pattern: '^wi_[A-Za-z0-9]+$' }
+    MissionId: { type: string, pattern: '^mi_[A-Za-z0-9]+$' }
+    RunId: { type: string, pattern: '^run_[A-Za-z0-9]+$' }
+    Timestamp: { type: string, format: date-time }
+    ShortText: { type: string, minLength: 1, maxLength: 800 }
+    BusinessStatus: { type: string, enum: [DRAFT, READY, IN_PROGRESS, REVIEW, DONE, ARCHIVED, CANCELLED] }
+    AcceptanceStatus: { type: string, enum: [NOT_REQUESTED, PENDING, ACCEPTED, CHANGES_REQUESTED] }
+    AttentionState: { type: string, enum: [NONE, WAITING_INPUT, APPROVAL_REQUIRED, RUN_FAILED, RUN_UNCERTAIN, NODE_OFFLINE, STALE] }
+    ContextRef:
+      type: object
+      additionalProperties: false
+      required: [ref, label]
+      properties:
+        ref: { $ref: '#/components/schemas/Identifier' }
+        label: { type: string, minLength: 1, maxLength: 200 }
+    TaskDefinition:
+      type: object
+      required: [title, objective, acceptanceSummary, sideEffectSummary, priority, targetNodeId, workspaceRef, contextRefs, runtimeKind, executionProfile, actor, reason]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 200 }
+        objective: { $ref: '#/components/schemas/ShortText' }
+        acceptanceSummary: { $ref: '#/components/schemas/ShortText' }
+        sideEffectSummary: { $ref: '#/components/schemas/ShortText' }
+        priority: { type: integer, minimum: -100, maximum: 100 }
+        targetNodeId: { $ref: '#/components/schemas/Identifier' }
+        workspaceRef: { $ref: '#/components/schemas/Identifier' }
+        contextRefs: { type: array, minItems: 1, maxItems: 16, uniqueItems: true, items: { $ref: '#/components/schemas/ContextRef' } }
+        runtimeKind: { $ref: '#/components/schemas/Identifier' }
+        executionProfile: { $ref: '#/components/schemas/Identifier' }
+        actor: { $ref: '#/components/schemas/Identifier' }
+        reason: { $ref: '#/components/schemas/ShortText' }
+    CreateTaskRequest:
+      allOf:
+        - $ref: '#/components/schemas/TaskDefinition'
+        - type: object
+          required: [dataBoundaryAcknowledged]
+          properties: { dataBoundaryAcknowledged: { type: boolean, const: true } }
+      unevaluatedProperties: false
+    UpdateTaskRequest:
+      allOf:
+        - $ref: '#/components/schemas/TaskDefinition'
+        - type: object
+          required: [expectedVersion]
+          properties: { expectedVersion: { type: integer, minimum: 1 } }
+      unevaluatedProperties: false
+    TaskActionRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, actor, reason]
+      properties:
+        expectedVersion: { type: integer, minimum: 1 }
+        actor: { $ref: '#/components/schemas/Identifier' }
+        reason: { $ref: '#/components/schemas/ShortText' }
+    AcceptTaskRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, actor, reason, deliverySummary, commitSha, prUrl]
+      properties:
+        expectedVersion: { type: integer, minimum: 1 }
+        actor: { $ref: '#/components/schemas/Identifier' }
+        reason: { $ref: '#/components/schemas/ShortText' }
+        deliverySummary: { $ref: '#/components/schemas/ShortText' }
+        commitSha: { type: string, pattern: '^[a-fA-F0-9]{7,64}$' }
+        prUrl: { type: string, format: uri, pattern: '^https://' }
+    CreatedTask:
+      type: object
+      additionalProperties: false
+      required: [taskId, version, businessStatus, createdAt]
+      properties:
+        taskId: { $ref: '#/components/schemas/TaskId' }
+        version: { type: integer, minimum: 1 }
+        businessStatus: { type: string, const: DRAFT }
+        createdAt: { $ref: '#/components/schemas/Timestamp' }
+    StartedTask:
+      type: object
+      additionalProperties: false
+      required: [taskId, version, workItemId, missionId, runId, businessStatus, startedAt]
+      properties:
+        taskId: { $ref: '#/components/schemas/TaskId' }
+        version: { type: integer, minimum: 1 }
+        workItemId: { $ref: '#/components/schemas/WorkItemId' }
+        missionId: { $ref: '#/components/schemas/MissionId' }
+        runId: { $ref: '#/components/schemas/RunId' }
+        businessStatus: { type: string, const: IN_PROGRESS }
+        startedAt: { $ref: '#/components/schemas/Timestamp' }
+    TaskSummary:
+      type: object
+      additionalProperties: false
+      required: [taskId, title, priority, targetNodeId, businessStatus, acceptanceStatus, attentionState, version, stale, nodeStatus, updatedAt]
+      properties:
+        taskId: { $ref: '#/components/schemas/TaskId' }
+        title: { type: string, minLength: 1, maxLength: 200 }
+        priority: { type: integer, minimum: -100, maximum: 100 }
+        targetNodeId: { $ref: '#/components/schemas/Identifier' }
+        businessStatus: { $ref: '#/components/schemas/BusinessStatus' }
+        acceptanceStatus: { $ref: '#/components/schemas/AcceptanceStatus' }
+        attentionState: { $ref: '#/components/schemas/AttentionState' }
+        version: { type: integer, minimum: 1 }
+        runStatus: { type: string, maxLength: 128 }
+        progressSummary: { $ref: '#/components/schemas/ShortText' }
+        lastObservedAt: { $ref: '#/components/schemas/Timestamp' }
+        stale: { type: boolean }
+        nodeStatus: { type: string, enum: [online, offline] }
+        updatedAt: { $ref: '#/components/schemas/Timestamp' }
+    TaskRun:
+      type: object
+      additionalProperties: false
+      required: [workItemId, missionId, runId, missionRevision, status, stale, createdAt]
+      properties:
+        workItemId: { $ref: '#/components/schemas/WorkItemId' }
+        missionId: { $ref: '#/components/schemas/MissionId' }
+        runId: { $ref: '#/components/schemas/RunId' }
+        missionRevision: { type: integer, minimum: 1 }
+        status: { type: string, enum: [assigned, running, waiting_interaction, cancelling, completed, failed, interrupted, uncertain, cancelled] }
+        phaseCode: { $ref: '#/components/schemas/Identifier' }
+        progressSummary: { $ref: '#/components/schemas/ShortText' }
+        resultSummary: { $ref: '#/components/schemas/ShortText' }
+        lastObservedAt: { $ref: '#/components/schemas/Timestamp' }
+        stale: { type: boolean }
+        createdAt: { $ref: '#/components/schemas/Timestamp' }
+    TaskEvent:
+      type: object
+      additionalProperties: false
+      required: [eventId, sequence, eventType, summary, actor, source, occurredAt]
+      properties:
+        eventId: { $ref: '#/components/schemas/Identifier' }
+        sequence: { type: integer, minimum: 1 }
+        eventType: { $ref: '#/components/schemas/Identifier' }
+        summary: { $ref: '#/components/schemas/ShortText' }
+        actor: { $ref: '#/components/schemas/Identifier' }
+        source: { type: string, enum: [USER, SERVICE, NODE] }
+        workItemId: { $ref: '#/components/schemas/WorkItemId' }
+        missionId: { $ref: '#/components/schemas/MissionId' }
+        runId: { $ref: '#/components/schemas/RunId' }
+        occurredAt: { $ref: '#/components/schemas/Timestamp' }
+    TaskDetail:
+      type: object
+      additionalProperties: false
+      required: [taskId, title, objective, acceptanceSummary, sideEffectSummary, priority, targetNodeId, workspaceRef, contextRefs, runtimeKind, executionProfile, businessStatus, acceptanceStatus, attentionState, version, allowedActions, nodeStatus, runs, timeline, createdAt, updatedAt]
+      properties:
+        taskId: { $ref: '#/components/schemas/TaskId' }
+        title: { type: string, minLength: 1, maxLength: 200 }
+        objective: { $ref: '#/components/schemas/ShortText' }
+        acceptanceSummary: { $ref: '#/components/schemas/ShortText' }
+        sideEffectSummary: { $ref: '#/components/schemas/ShortText' }
+        priority: { type: integer, minimum: -100, maximum: 100 }
+        targetNodeId: { $ref: '#/components/schemas/Identifier' }
+        workspaceRef: { $ref: '#/components/schemas/Identifier' }
+        contextRefs: { type: array, minItems: 1, maxItems: 16, items: { $ref: '#/components/schemas/ContextRef' } }
+        runtimeKind: { $ref: '#/components/schemas/Identifier' }
+        executionProfile: { $ref: '#/components/schemas/Identifier' }
+        businessStatus: { $ref: '#/components/schemas/BusinessStatus' }
+        acceptanceStatus: { $ref: '#/components/schemas/AcceptanceStatus' }
+        attentionState: { $ref: '#/components/schemas/AttentionState' }
+        deliverySummary: { $ref: '#/components/schemas/ShortText' }
+        commitSha: { type: string, pattern: '^[a-f0-9]{7,64}$' }
+        prUrl: { type: string, format: uri }
+        version: { type: integer, minimum: 1 }
+        allowedActions: { type: array, maxItems: 8, uniqueItems: true, items: { type: string, enum: [EDIT, MARK_READY, START, ACCEPT, REQUEST_CHANGES, CANCEL, ARCHIVE, RESTORE] } }
+        nodeStatus: { type: string, enum: [online, offline] }
+        nodeLastHeartbeatAt: { $ref: '#/components/schemas/Timestamp' }
+        runs: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/TaskRun' } }
+        timeline: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/TaskEvent' } }
+        createdAt: { $ref: '#/components/schemas/Timestamp' }
+        updatedAt: { $ref: '#/components/schemas/Timestamp' }
+        archivedAt: { $ref: '#/components/schemas/Timestamp' }
+    ApiError:
+      type: object
+      additionalProperties: false
+      required: [code, message, requestId]
+      properties:
+        code: { $ref: '#/components/schemas/Identifier' }
+        message: { $ref: '#/components/schemas/ShortText' }
+        requestId: { $ref: '#/components/schemas/Identifier' }

@@ -1,13 +1,23 @@
 ---
 status: authoritative
-authority: DF-0.3-control-loop
-source_ref: service-design-s2
+authority: DF-0.5-business-loop
+source_ref: service-design-s3-task-p1
 owner: workbench-service
 superseded_by: null
-last_verified: 2026-08-20
+last_verified: 2026-08-21
 ---
 
-# workbench-service 详细设计 S2
+# workbench-service 详细设计 S3
+
+## 0. v0.5 P1 增量
+
+Service 新增独立版本的 `/api/tasks/v1`，不改变 Client API v2“创建 WorkItem 即执行”的语义。Task 是业务对象；WorkItem/Mission/Run 是执行对象；Acceptance 是独立人工轴。Task create/edit/mark-ready 不创建执行记录，READY 的显式 start 才在单事务内创建新 WorkItem/Mission/Run/START_RUN 和关联 TaskEvent。每次重试追加新 revision/Run，不覆盖历史。
+
+所有 mutation 要求 Idempotency-Key、actor、reason；create 以外还要求 expectedVersion。TaskEvent 与变更同事务 append-only。successful Run 只投影为 `REVIEW/PENDING`，失败或不确定返回 READY 并产生 attention；只有显式 accept 且 delivery summary、commit SHA、HTTPS PR URL 齐备时进入 DONE。归档只允许 DONE/CANCELLED，可恢复且不物理删除。
+
+Task 产品字段只保存 workspaceRef/contextRef 安全 alias 和短控制摘要。`mission_context_refs` 只为 Node Protocol 命令重建 alias，不保存解析路径。Task 查询计算 Node 在线性、lastObservedAt 和 stale；旧 v2 WorkItem 没有 Task 关联时不受投影影响。
+
+以下 S2 小节继续描述 Client/Node API v2 执行骨架；其中“创建任务”仅指旧 v2 的 WorkItem 创建，不代表 v0.5 Task 产品语义。
 
 ## 1. 模块职责
 

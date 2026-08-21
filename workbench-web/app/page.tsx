@@ -1,160 +1,55 @@
 import Link from "next/link";
 import { AppShell } from "./_components/AppShell";
 import { EmptyState } from "./_components/EmptyState";
-import { ServiceProblem } from "./_components/ServiceProblem";
 import { StatusBadge } from "./_components/StatusBadge";
 import { formatTimestamp } from "./_lib/presentation";
-import {
-  listNodes,
-  listWorkItems,
-  type NodeSummary,
-  type WorkItemSummary,
-} from "./_lib/workbench-service";
+import type { TaskSummary } from "./_lib/task-contracts";
+import { listTasks, TaskServiceError } from "./_lib/task-service";
 import { requireChatGPTUser } from "./chatgpt-auth";
 
 export const dynamic = "force-dynamic";
 
-const ACTIVE_STATUSES = new Set(["open", "in_progress"]);
-
 export default async function Home() {
   await requireChatGPTUser("/");
-  const homeState = await loadHomeState();
-
-  if (homeState.kind === "error") {
-    return (
-      <AppShell
-        currentPath="/"
-        eyebrow="CONTROL OVERVIEW"
-        title="工作正在什么位置"
-        description="只读视图暂时无法取得控制状态。"
-      >
-        <ServiceProblem error={homeState.error} />
-      </AppShell>
-    );
+  const state = await loadTasks();
+  if (state.kind === "error") {
+    return <AppShell currentPath="/" eyebrow="TASK POOL" title="以 Task 为中心的工作池" description="Task Service 暂时不可用。"><TaskProblem error={state.error} /></AppShell>;
   }
-
-  const activeWorkItems = homeState.workItems.filter((item) =>
-    ACTIVE_STATUSES.has(item.status),
-  );
-  const recentTerminalWorkItems = homeState.workItems
-    .filter((item) => !ACTIVE_STATUSES.has(item.status))
-    .slice(0, 6);
-  const onlineNodes = homeState.nodes.filter(
-    (node) => node.status === "online",
-  ).length;
-
+  const attentionCount = state.tasks.filter((task) => task.attentionState !== "NONE" || task.businessStatus === "REVIEW").length;
+  const executingCount = state.tasks.filter((task) => task.businessStatus === "IN_PROGRESS").length;
+  const readyCount = state.tasks.filter((task) => task.businessStatus === "READY").length;
   return (
-    <AppShell
-      currentPath="/"
-      eyebrow="CONTROL OVERVIEW"
-      title="工作正在什么位置"
-      description="只展示 Service 保存的短控制状态；完整日志、产物和 Runtime 对话始终留在执行电脑。"
-    >
-      <section className="metric-grid" aria-label="Workbench 概览">
-        <MetricCard
-          label="进行中的工作"
-          value={activeWorkItems.length}
-          detail={`${activeWorkItems.reduce((count, item) => count + item.waitingInteractionCount, 0)} 项等待输入`}
-        />
-        <MetricCard label="在线节点" value={`${onlineNodes}/${homeState.nodes.length}`} detail="以最后心跳为准" />
-        <MetricCard label="最近终态" value={recentTerminalWorkItems.length} detail="当前查询窗口内" />
+    <AppShell currentPath="/" eyebrow="TASK POOL" title="以 Task 为中心的工作池" description="创建与编辑只形成 READY 合同；只有显式开始才会创建执行对象并交给 Node。">
+      <div className="hero-actions"><Link className="button button--primary" href="/tasks/new">新建 Task</Link><Link className="button" href="/attention">查看需关注项</Link></div>
+      <section className="metric-grid" aria-label="Task 概览">
+        <Metric label="READY" value={readyCount} detail="等待用户显式开始" />
+        <Metric label="执行中" value={executingCount} detail="4 秒条件刷新" />
+        <Metric label="需关注" value={attentionCount} detail="验收、失败、离线或 stale" />
       </section>
-
-      <div className="content-grid">
-        <section className="panel panel--primary" aria-labelledby="active-work-title">
-          <PanelHeading id="active-work-title" title="活动工作" detail={`${activeWorkItems.length} 项`} />
-          {activeWorkItems.length === 0 ? (
-            <EmptyState title="现在没有活动工作" description="新 Mission 创建后会出现在这里。" />
-          ) : (
-            <WorkItemList workItems={activeWorkItems} />
-          )}
-        </section>
-
-        <section className="panel" aria-labelledby="recent-terminal-title">
-          <PanelHeading
-            id="recent-terminal-title"
-            title="最近终态"
-            detail={`${recentTerminalWorkItems.length} 项`}
-          />
-          {recentTerminalWorkItems.length === 0 ? (
-            <EmptyState title="还没有终态记录" description="完成、失败或取消的工作会在这里汇总。" />
-          ) : (
-            <WorkItemList workItems={recentTerminalWorkItems} compact />
-          )}
-        </section>
-      </div>
+      <section className="panel panel--primary">
+        <header className="panel-heading"><h2>活动 Task</h2><span>{state.tasks.length} 项</span></header>
+        {state.tasks.length === 0 ? <EmptyState title="现在没有 Task" description="先创建一个草稿；保存不会启动 WS。" /> : <TaskList tasks={state.tasks} />}
+      </section>
     </AppShell>
   );
 }
 
-async function loadHomeState(): Promise<
-  | { kind: "loaded"; workItems: WorkItemSummary[]; nodes: NodeSummary[] }
-  | { kind: "error"; error: unknown }
-> {
-  try {
-    const [workItems, nodes] = await Promise.all([listWorkItems(), listNodes()]);
-    return { kind: "loaded", workItems, nodes };
-  } catch (error) {
-    return { kind: "error", error };
-  }
+async function loadTasks(): Promise<{ kind: "loaded"; tasks: TaskSummary[] } | { kind: "error"; error: unknown }> {
+  try { return { kind: "loaded", tasks: await listTasks("?limit=100") }; }
+  catch (error) { return { kind: "error", error }; }
 }
 
-function MetricCard({
-  label,
-  value,
-  detail,
-}: {
-  label: string;
-  value: string | number;
-  detail: string;
-}) {
-  return (
-    <article className="metric-card">
-      <span>{label}</span>
-      <strong>{value}</strong>
-      <small>{detail}</small>
-    </article>
-  );
+export function TaskList({ tasks }: { tasks: TaskSummary[] }) {
+  return <ul className="work-list">{tasks.map((task) => (
+    <li key={task.taskId}><Link href={`/tasks/${encodeURIComponent(task.taskId)}`}>
+      <span className="work-list__copy"><strong>{task.title}</strong><small>{task.progressSummary ?? "尚未产生执行进度"}</small><small>{task.targetNodeId} · lastObservedAt {task.lastObservedAt ? formatTimestamp(task.lastObservedAt) : "尚未观测"}{task.stale ? " · STALE" : ""}</small></span>
+      <span className="task-list__statuses"><StatusBadge status={task.businessStatus} />{task.attentionState !== "NONE" ? <StatusBadge status={task.attentionState} /> : null}</span>
+    </Link></li>
+  ))}</ul>;
 }
 
-function PanelHeading({ id, title, detail }: { id: string; title: string; detail: string }) {
-  return (
-    <header className="panel-heading">
-      <h2 id={id}>{title}</h2>
-      <span>{detail}</span>
-    </header>
-  );
-}
-
-function WorkItemList({
-  workItems,
-  compact = false,
-}: {
-  workItems: WorkItemSummary[];
-  compact?: boolean;
-}) {
-  return (
-    <ul className={compact ? "work-list work-list--compact" : "work-list"}>
-      {workItems.map((workItem) => (
-        <li key={workItem.workItemId}>
-          <Link href={`/work-items/${encodeURIComponent(workItem.workItemId)}`}>
-            <span className="work-list__copy">
-              <strong>{workItem.title}</strong>
-              <small>
-                {workItem.phaseCode ? `${workItem.phaseCode} · ` : ""}
-                {workItem.progressSummary ?? "Service 尚未收到进度摘要"}
-              </small>
-              <small>
-                {workItem.waitingInteractionCount > 0
-                  ? `${workItem.waitingInteractionCount} 项等待输入 · `
-                  : ""}
-                最后同步于 {formatTimestamp(workItem.lastSyncedAt ?? workItem.updatedAt)}
-              </small>
-            </span>
-            <StatusBadge status={workItem.status} />
-          </Link>
-        </li>
-      ))}
-    </ul>
-  );
+function Metric({ label, value, detail }: { label: string; value: number; detail: string }) { return <article className="metric-card"><span>{label}</span><strong>{value}</strong><small>{detail}</small></article>; }
+function TaskProblem({ error }: { error: unknown }) {
+  const contractMismatch = error instanceof TaskServiceError && error.kind === "invalid_response";
+  return <section className="problem-panel" role="alert"><p>{contractMismatch ? "CONTRACT MISMATCH" : "SERVICE UNAVAILABLE"}</p><h2>{contractMismatch ? "Service 响应不符合合同" : "暂时无法读取 Task"}</h2><span>页面不会使用缓存旧状态，也不会绕过同源 BFF 或直接连接 Node。</span></section>;
 }

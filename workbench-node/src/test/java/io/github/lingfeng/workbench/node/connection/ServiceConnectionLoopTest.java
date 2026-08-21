@@ -8,6 +8,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import io.github.lingfeng.workbench.node.config.NodeProperties;
 import io.github.lingfeng.workbench.node.localstate.ControlLoopStore;
 import io.github.lingfeng.workbench.node.orchestration.RunSupervisor;
+import io.github.lingfeng.workbench.node.orchestration.FailClosedAcceptanceEvaluator;
 import io.github.lingfeng.workbench.node.protocol.v2.ProtocolAck;
 import io.github.lingfeng.workbench.node.protocol.v2.DurableNodeEvent;
 import io.github.lingfeng.workbench.node.protocol.v2.PollResult;
@@ -35,7 +36,8 @@ class ServiceConnectionLoopTest {
         ControlLoopStore store = new ControlLoopStore(
                 temporaryDirectory, "node_alpha", MAPPER, Clock.systemUTC());
         FakeSessionRuntimeAdapter runtime = new FakeSessionRuntimeAdapter("FLOW", Duration.ofMillis(200), MAPPER);
-        RunSupervisor supervisor = new RunSupervisor(properties, store, runtime);
+        RunSupervisor supervisor = new RunSupervisor(
+                properties, store, runtime, new FailClosedAcceptanceEvaluator());
         FakeService service = new FakeService();
         service.pollResults.add(new PollResult.Command(start()));
         service.pollResults.add(new PollResult.NoCommand());
@@ -63,7 +65,8 @@ class ServiceConnectionLoopTest {
                 temporaryDirectory, "node_alpha", MAPPER, Clock.systemUTC());
         store.storeCommand(start());
         FakeSessionRuntimeAdapter runtime = new FakeSessionRuntimeAdapter("FLOW", Duration.ofMillis(20), MAPPER);
-        RunSupervisor supervisor = new RunSupervisor(properties, store, runtime);
+        RunSupervisor supervisor = new RunSupervisor(
+                properties, store, runtime, new FailClosedAcceptanceEvaluator());
         FakeService service = new FakeService();
         service.duplicateAck = true;
         try (runtime; supervisor;
@@ -97,10 +100,17 @@ class ServiceConnectionLoopTest {
     }
 
     private NodeProperties properties(URI proxyUri, Path proxyPasswordFile, Path trustStore) {
+        Path workspace;
+        try {
+            workspace = Files.createDirectories(temporaryDirectory.resolve("workspace"));
+        } catch (java.io.IOException exception) {
+            throw new IllegalStateException("Test workspace could not be created", exception);
+        }
         return new NodeProperties(
                 "node_alpha", "Node Alpha", URI.create("https://service.example/"), "x".repeat(32),
-                temporaryDirectory, Duration.ofMillis(20), Duration.ofSeconds(2), "fake-session", "ws",
-                Map.of("workspace_main", temporaryDirectory.resolve("workspace")), Duration.ofMillis(20),
+                temporaryDirectory, Duration.ofMillis(20), Duration.ofSeconds(2), "fake-session", null,
+                "0.0.0--test", null, null, null, Duration.ofSeconds(2), Duration.ofSeconds(1),
+                Map.of("workspace_main", workspace), Duration.ofMillis(20),
                 Duration.ofSeconds(1), Duration.ofMillis(10), Duration.ofSeconds(1), proxyUri,
                 proxyPasswordFile, trustStore, null, "FLOW", Duration.ofMillis(200));
     }

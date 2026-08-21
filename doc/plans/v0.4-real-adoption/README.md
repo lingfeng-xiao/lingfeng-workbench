@@ -1,13 +1,15 @@
 ---
-status: proposed
+status: legacy-reference
 authority: DF-0.4-real-adoption
 source_ref: plan-v0.4-real-adoption
 owner: architecture
-superseded_by: null
+superseded_by: ADR-003
 last_verified: 2026-08-20
 ---
 
 # v0.4 真实业务渐进验证计划
+
+> 本计划基于旧三 Turn/terminal CLI 协议，只保留为历史 Gate 证据。新的真实 WS 验证以 ADR-003 和 `research/opencode-native-runtime-2026-08-20.md` 为准，不执行本计划的迁移或旧协议 canary。
 
 ## 1. 目标
 

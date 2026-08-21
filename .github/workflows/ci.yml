@@ -30,6 +30,7 @@ jobs:
           npx --yes @redocly/cli@2.46.2 lint
           doc/contracts/client-api-v2.openapi.yaml
           doc/contracts/node-protocol-v2.openapi.yaml
+          doc/contracts/task-api-v1.openapi.yaml
 
   java:
     name: Java 21 reactor

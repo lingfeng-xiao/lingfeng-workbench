@@ -42,6 +42,7 @@ commandId, workItemId, missionId, runId
 missionRevision, missionDigest
 objective, acceptanceSummary, authorizedSideEffectsSummary
 targetNodeId, workspaceRef, runtimeKind, executionProfile
+contextRefs?（v0.5 可选安全别名数组；旧 v2 命令省略时语义不变）
 ```
 
 ### PROVIDE_INTERACTION_RESPONSE
@@ -124,19 +125,19 @@ Hermes 以 `notificationId` 去重，并回报 `DELIVERED` 或 `FAILED`。Servic
 
 ## 6. Node 到 Runtime 的本地会话合同
 
+本小节已由 ADR-003 取代；Service→Node 的 HTTP 字段和事件集合不变。Node 内部不得再用固定 Turn 或模型输出 terminal 文本实现这些投影。
+
 该合同不通过 HTTP，不进入 OpenAPI。Node SPI 提供异步命令：
 
 ```text
-probe
-capabilities
+probe/capabilityGate
 openSession
-submitTurn
+submitMissionPromptAsync
+subscribeEvents
+reconcileStatusMessagesAndPendingInteractions
 provideInteractionResponse
-requestCheckpoint
-pause
-resume
-cancel
-inspect
+reattachSession
+abort
 closeSession
 ```
 
@@ -144,21 +145,19 @@ Adapter 产生归一化事件：
 
 ```text
 SessionOpened
-TurnAccepted
+MissionAccepted
+RuntimeStatusChanged
 PhaseChanged
 ProgressUpdated
 ArtifactChanged
 InteractionRequested
-CheckpointSaved
-Paused
-Resumed
+RuntimeIdle
 RuntimeWarning
-TurnFinished
 SessionFailed
 SessionClosed
 ```
 
-SPI 必须异步，不得阻塞 ServiceConnectionLoop。`ArtifactChanged`、RuntimeWarning 详情和 Turn 内容默认只落本地。Adapter 私有保存 Runtime Session/handle、原始消息和恢复 token。
+SPI 必须异步，不得阻塞 ServiceConnectionLoop。`ArtifactChanged`、RuntimeWarning 详情和 message 内容默认只落本地。Adapter 私有保存 Runtime Session/handle、server identity、原始消息和事件；验收状态由独立组件产生，不由 Adapter 解释 assistant 文本。
 
 ## 7. 状态映射
 

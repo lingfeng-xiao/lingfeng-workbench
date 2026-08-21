@@ -3,17 +3,18 @@ package io.github.lingfeng.workbench.node.runtime.session;
 import java.util.Set;
 
 public sealed interface NormalizedRuntimeEvent permits NormalizedRuntimeEvent.SessionOpened,
-        NormalizedRuntimeEvent.TurnAccepted, NormalizedRuntimeEvent.PhaseChanged,
-        NormalizedRuntimeEvent.ProgressUpdated, NormalizedRuntimeEvent.InteractionRequested,
-        NormalizedRuntimeEvent.CheckpointSaved, NormalizedRuntimeEvent.Paused,
-        NormalizedRuntimeEvent.Resumed, NormalizedRuntimeEvent.TurnFinished,
-        NormalizedRuntimeEvent.SessionFailed, NormalizedRuntimeEvent.SessionClosed,
-        NormalizedRuntimeEvent.Terminal {
+        NormalizedRuntimeEvent.MissionAccepted, NormalizedRuntimeEvent.StatusChanged,
+        NormalizedRuntimeEvent.PhaseChanged, NormalizedRuntimeEvent.ProgressUpdated,
+        NormalizedRuntimeEvent.InteractionRequested, NormalizedRuntimeEvent.RuntimeIdle,
+        NormalizedRuntimeEvent.SessionFailed, NormalizedRuntimeEvent.SessionClosed {
 
     record SessionOpened(boolean resumable) implements NormalizedRuntimeEvent {
     }
 
-    record TurnAccepted(String turnId) implements NormalizedRuntimeEvent {
+    record MissionAccepted() implements NormalizedRuntimeEvent {
+    }
+
+    record StatusChanged(RuntimeStatus status, String summary) implements NormalizedRuntimeEvent {
     }
 
     record PhaseChanged(String phaseCode, String summary) implements NormalizedRuntimeEvent {
@@ -34,29 +35,13 @@ public sealed interface NormalizedRuntimeEvent permits NormalizedRuntimeEvent.Se
         }
     }
 
-    record CheckpointSaved(String checkpointId) implements NormalizedRuntimeEvent {
-    }
-
-    record Paused(String checkpointId) implements NormalizedRuntimeEvent {
-    }
-
-    record Resumed(String checkpointId) implements NormalizedRuntimeEvent {
-    }
-
-    record TurnFinished(String turnId) implements NormalizedRuntimeEvent {
+    record RuntimeIdle(String resultSummary) implements NormalizedRuntimeEvent {
     }
 
     record SessionFailed(String summary) implements NormalizedRuntimeEvent {
     }
 
     record SessionClosed() implements NormalizedRuntimeEvent {
-    }
-
-    record Terminal(
-            String missionDigest,
-            RuntimeOutcome runtimeOutcome,
-            AcceptanceStatus acceptanceStatus,
-            String resultSummary) implements NormalizedRuntimeEvent {
     }
 
     enum RuntimeOutcome {

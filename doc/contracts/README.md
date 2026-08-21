@@ -11,6 +11,7 @@ last_verified: 2026-08-20
 
 ## 当前唯一合同
 
+- `task-api-v1.openapi.yaml`：DF-0.5 Task 产品合同；使用独立 `/api/tasks/v1` 版本空间，不改变 Client API v2 的“创建即执行”兼容语义；
 - `control-loop-v2.md`：Client v2、Node v2、Node/Runtime 会话协议的权威语义合同；
 - `client-api-v2.openapi.yaml`、`node-protocol-v2.openapi.yaml` 编码冻结的 v2 HTTP 合同，`fixtures/v2/` 提供每类命令、事件、Interaction 和 Notification 的正反例；
 - 在本目录运行 `npm ci && npm run lint && npm test` 执行严格 OpenAPI、fixture、64 KiB、800 字符、精确 Node 绑定和敏感字段 Gate；

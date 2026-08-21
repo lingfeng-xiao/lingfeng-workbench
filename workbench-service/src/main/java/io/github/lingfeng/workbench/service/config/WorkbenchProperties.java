@@ -6,12 +6,14 @@ import java.util.Map;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 @ConfigurationProperties(prefix = "workbench")
-public record WorkbenchProperties(Security security, Node node, Notification notification) {
+public record WorkbenchProperties(
+    Security security, Node node, Notification notification, Task task) {
 
   public WorkbenchProperties {
     security = security == null ? new Security("", "", "", Map.of()) : security;
     node = node == null ? new Node(Duration.ofSeconds(90), Duration.ofSeconds(30)) : node;
     notification = notification == null ? new Notification(Duration.ofMinutes(5), 3) : notification;
+    task = task == null ? new Task(Duration.ofSeconds(30)) : task;
   }
 
   public record Security(
@@ -38,6 +40,13 @@ public record WorkbenchProperties(Security security, Node node, Notification not
       if (maxAttempts < 1) {
         maxAttempts = 3;
       }
+    }
+  }
+
+  public record Task(Duration observationStaleAfter) {
+    public Task {
+      observationStaleAfter =
+          observationStaleAfter == null ? Duration.ofSeconds(30) : observationStaleAfter;
     }
   }
 }

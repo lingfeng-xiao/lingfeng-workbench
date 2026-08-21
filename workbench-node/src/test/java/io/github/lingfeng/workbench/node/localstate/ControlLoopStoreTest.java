@@ -10,8 +10,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import io.github.lingfeng.workbench.node.protocol.v2.NodeCommand;
 import io.github.lingfeng.workbench.node.protocol.v2.ProtocolValidation;
 import io.github.lingfeng.workbench.node.runtime.session.NormalizedRuntimeEvent;
+import io.github.lingfeng.workbench.node.runtime.session.SessionHandle;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.DriverManager;
 import java.time.Clock;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
@@ -55,7 +57,8 @@ class ControlLoopStoreTest {
         store.storeCommand(start());
         assertThatThrownBy(() -> store.storeCommand(response()))
                 .isInstanceOf(LocalStateException.class).hasMessageContaining("not waiting");
-        store.saveSession("run_001", "local-secret-session", true);
+        store.saveSession("run_001", new SessionHandle(
+                "local-secret-session", "fake-session", "test", temporaryDirectory.toString()), true);
         store.recordInteraction("run_001", "int_001", "cp_001", "Approve?", Set.of("APPROVE"), true);
 
         assertThatThrownBy(() -> store.storeCommand(response("cp_wrong", DIGEST, "node_alpha", "cmd_wrong")))
@@ -97,6 +100,25 @@ class ControlLoopStoreTest {
         assertThat(reopened.pendingEvents(10)).extracting(event -> event.eventType())
                 .containsExactly("COMMAND_STORED", "RUN_TERMINAL");
         assertThat(reopened.activeRun()).isEmpty();
+    }
+
+    @Test
+    void successfulRuntimeWithFailedAcceptanceIsDurablyFailed() throws Exception {
+        ControlLoopStore store = store();
+        store.storeCommand(start());
+
+        assertThat(store.tryRecordTerminal(
+                "run_001", NormalizedRuntimeEvent.RuntimeOutcome.SUCCEEDED,
+                NormalizedRuntimeEvent.AcceptanceStatus.FAILED, "verification failed")).isTrue();
+
+        try (var connection = DriverManager.getConnection(
+                "jdbc:sqlite:" + temporaryDirectory.resolve("node.db"));
+             var query = connection.prepareStatement(
+                     "SELECT state FROM control_local_run WHERE run_id='run_001'");
+             var row = query.executeQuery()) {
+            assertThat(row.next()).isTrue();
+            assertThat(row.getString(1)).isEqualTo("failed");
+        }
     }
 
     private ControlLoopStore store() {

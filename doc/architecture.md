@@ -13,7 +13,7 @@ last_verified: 2026-08-20
 
 Workbench 把“业务控制”和“本机执行”分开：Service 保存最小、可信、可查询的控制状态；Node 在执行电脑上管理 Agent 会话；Agent Runtime 才读取源码、调用工具并完成实际工作。系统首先闭合两条链路：
 
-1. **工作流闭环**：任务可在工作电脑无人值守运行，经历多轮 Agent Turn、暂停、审批、恢复和可信验收；
+1. **工作流闭环**：任务可在工作电脑无人值守运行，使用一个原生 Agent Session、审批/问答、恢复和独立可信验收；
 2. **通知闭环**：Service 产生通知意图，Hermes 通过微信投递并回传审批，Web 能看到相同的短状态。
 
 ## 2. 模块与外部组件
@@ -44,7 +44,7 @@ Hermes / Sites Web / trusted client
                   v
           workbench-node         local control plane
                   |
-        runtime-neutral session protocol
+        thin native OpenCode client
                   |
         Agent Runtime Adapter
                   |
@@ -84,28 +84,27 @@ Service、Hermes 和 Web 禁止接收或保存：Runtime Session、resume token�
 
 Sites Web 不拥有业务数据；D1/R2 保持 `null`，浏览器不持有 Service credential，不使用浏览器存储保存业务状态。
 
-## 6. 三层状态
+## 6. Run、Session 与 message
 
-Run、Agent Session 和 Turn 是三个不同生命周期：
+Run、Agent Session 和 message 是不同概念：
 
 - **Run**：Mission 的一次业务执行，Service 与 Node 共同识别；
 - **Agent Session**：Node 本地持有的 Runtime 会话，一个 Run 在 MVP 中恰好对应一个 Session；
-- **Turn**：向 Agent 提交的一次输入及其执行过程，一个 Session 可以有多个 Turn。
+- **message**：OpenCode 原生会话输入/输出；一个 Mission 通常只有一次初始 prompt，真实追问才增加 message。
 
-Service 只保存 Run 状态和 `resumable` 投影，不保存 Session/Turn 标识。Node 串行化同一 Run 的命令、Runtime 事件、超时和取消，先持久化的终态决定本地结果，后到事件只作本地审计。
+Service 只保存 Run 状态和 `resumable` 投影，不保存 Session/message 标识。Node 串行化同一 Run 的命令、Runtime 事件、超时和取消，先持久化的终态决定本地结果，后到事件只作本地审计。
 
 ## 7. 可信完成
 
 只有同时满足以下条件，Run、Mission 和 WorkItem 才能完成：
 
-1. Runtime 产生结构化终态；
-2. 终态 `missionDigest` 与不可变 Mission 完全一致；
-3. `runtimeOutcome=SUCCEEDED`；
-4. `acceptanceStatus=PASSED`；
-5. Node 已在本地持久化终态；
-6. Service 接受该状态转换。
+1. OpenCode 原生 Session 已从 `busy/retry` 收敛到 `idle`，且 Node 已完成 status/message reconciliation；
+2. 独立 AcceptanceEvaluator 已用本地可核验证据检查不可变 Mission；
+3. `runtimeOutcome=SUCCEEDED` 且 `acceptanceStatus=PASSED`；
+4. Node 已在本地持久化终态；
+5. Service 接受该状态转换。
 
-进程退出码为 0、Session 正常关闭、普通完成文本、断网或超时都不能替代可信终态。缺少终态或恢复身份不明确时进入 `uncertain`，不得自动新建第二个 Agent Session。
+`idle`、HTTP 204、Session 正常存在、普通完成文本、断网或超时都不能单独替代业务验收。缺少验收证据或恢复身份不明确时进入 `uncertain`，不得自动新建第二个 Agent Session。
 
 ## 8. 安全边界与不做项
 

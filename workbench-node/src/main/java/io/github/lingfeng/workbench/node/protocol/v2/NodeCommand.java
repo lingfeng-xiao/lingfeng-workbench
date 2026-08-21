@@ -2,6 +2,7 @@ package io.github.lingfeng.workbench.node.protocol.v2;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import java.time.Instant;
+import java.util.List;
 
 public sealed interface NodeCommand permits NodeCommand.StartRun, NodeCommand.InteractionResponse, NodeCommand.CancelRun {
 
@@ -31,9 +32,14 @@ public sealed interface NodeCommand permits NodeCommand.StartRun, NodeCommand.In
             String acceptanceSummary,
             String authorizedSideEffectsSummary,
             String workspaceRef,
+            List<String> contextRefs,
             String runtimeKind,
             String executionProfile,
             JsonNode payload) implements NodeCommand {
+
+        public StartRun {
+            contextRefs = contextRefs == null ? List.of() : List.copyOf(contextRefs);
+        }
     }
 
     record InteractionResponse(

@@ -3,11 +3,13 @@ status: authoritative
 authority: DF-0.3-control-loop
 source_ref: ADR-002
 owner: architecture
-superseded_by: null
+superseded_by: ADR-003（仅 Node→Runtime 部分）
 last_verified: 2026-08-20
 ---
 
 # ADR-002：出站控制环与 Agent 会话
+
+> ADR-003 已取代本文关于 Runtime-neutral Turn/pause/checkpoint 协议的决定；Service 出站控制环、单 Run/Session、Interaction 精确绑定和数据边界继续有效。
 
 ## 背景
 

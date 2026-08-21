@@ -19,13 +19,15 @@ last_verified: 2026-08-20
 - Service 永不回连 Node 的出站 HTTPS 模型；
 - WorkItem、Mission、Run、Interaction、Node 的业务语义；
 - Notification 作为事务性投递记录而非业务聚合；
-- 一个 Run、一个本地 Agent Session、多个 Turn；
+- 一个 Run、一个本地 Agent Session；Session 内消息与执行生命周期使用 OpenCode 原生能力，不规定固定 Turn；
 - Node 异步网络循环、RunSupervisor、本地 outbox 和重启恢复；
 - Node 与 Runtime 的会话式中立协议；
 - Interaction 暂停、精确绑定、重投、ACK、同 Session 恢复；
 - 可信终态和敏感数据边界；
 - Web 私有只读和 Sites 无持久化边界；
 - 两个 E2E 闭环及独立 Gate。
+
+Node→Runtime 的具体 SPI、Interaction 暂停方式和完成判据已由 ADR-003 重新冻结：不再要求自建 pause/checkpoint/Turn/terminal 协议，业务验收改由独立 AcceptanceEvaluator 完成。Service→Node v2 合同与其余冻结边界不变。
 
 ## 保留项
 

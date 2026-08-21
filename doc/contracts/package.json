@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "lint": "redocly lint client-api-v2.openapi.yaml node-protocol-v2.openapi.yaml --extends=recommended --lint-config=error",
+    "lint": "redocly lint client-api-v2.openapi.yaml node-protocol-v2.openapi.yaml task-api-v1.openapi.yaml --extends=recommended --lint-config=error",
     "test": "node validate-v2-fixtures.mjs"
   },
   "devDependencies": {

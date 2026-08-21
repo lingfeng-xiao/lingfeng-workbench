@@ -24,6 +24,12 @@ class SecurityConfiguration {
         .authorizeHttpRequests(
             authorize ->
                 authorize
+                    .requestMatchers(HttpMethod.GET, "/api/tasks/v1/**")
+                    .hasAuthority("TASK_READ")
+                    .requestMatchers(HttpMethod.POST, "/api/tasks/v1/**")
+                    .hasAuthority("TASK_WRITE")
+                    .requestMatchers(HttpMethod.PUT, "/api/tasks/v1/**")
+                    .hasAuthority("TASK_WRITE")
                     .requestMatchers(HttpMethod.POST, "/api/client/v2/work-items")
                     .hasAuthority("V2_CREATE")
                     .requestMatchers(HttpMethod.POST, "/api/client/v2/interactions/*/resolution")

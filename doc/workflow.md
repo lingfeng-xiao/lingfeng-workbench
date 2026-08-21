@@ -17,7 +17,7 @@ Service 是任务控制状态的权威来源；工作电脑 `SPM/xlf` 是完整�
 - Mission：本次执行不可静默修改的合同；
 - Run：Mission 的一次执行；
 - Agent Session：Node 本地的一段持续 Agent 会话；
-- Turn：会话中的一次输入与执行；
+- message：OpenCode 会话中的原生输入与输出；
 - Interaction：需要可信客户端或人的精确输入；
 - Notification：Service 产生、Hermes 投递的消息意图，不是新的业务聚合。
 
@@ -29,14 +29,16 @@ Service 是任务控制状态的权威来源；工作电脑 `SPM/xlf` 是完整�
   -> Service 为目标 Node 建立 START_RUN 命令
   -> Node pull、落盘、ACK
   -> Node 打开 Agent Session
-  -> Agent 执行多个 Turn
+  -> Node 异步提交一次 Mission prompt
+  -> Agent 在原生 Session 内执行
        -> 理解任务和读取 xlf
        -> 冻结源码与需求上下文
        -> 实现
        -> Maven/Newman/专项验证
        -> 生成本地报告
   -> 必要时 WAITING_INTERACTION 并恢复同一 Session
-  -> Agent 产生结构化终态
+  -> OpenCode Session 收敛到 idle，Node 对账 status/messages/evidence
+  -> 独立 AcceptanceEvaluator 核验 Mission
   -> Node 本地保存完整证据并上报短终态
   -> Service 依据 PASSED/FAILED/UNKNOWN 汇总状态
   -> Web 和 Hermes 读取一致结果
@@ -66,7 +68,7 @@ REPORTING
 - 无法证明原 Session 身份时上报 `uncertain`，不自动再开一个 Session；
 - Interaction 等待期间保留 Session/checkpoint，不把请求解释为失败；
 - 同一工作区首轮只允许一个活动 Run，避免文件副作用竞争；
-- 取消、终态和 Interaction 响应都进入 RunSupervisor 的单一串行事件流。
+- 取消、idle/验收结果和 Interaction 响应都进入 RunSupervisor 的单一串行事件流。
 
 ## 4. 通知与审批闭环
 
@@ -117,7 +119,7 @@ Web 看到的是 Service 已持久化的状态；Node 尚未同步的本地进�
 
 ### E2E-FLOW
 
-创建 SPM Mission，Node 通过 fake Runtime 完成至少三个 Turn，中间断开 Service 网络后继续运行并重放事件，再产生 digest 匹配的 `PASSED` 终态。Service 和 Web 显示 completed；完整对话、Session、路径、diff 和报告只存在 Node。
+创建 SPM Mission，Node 通过 fake Runtime 向一个 Session 提交一次 prompt，中间断开 Service 网络后继续运行并重放事件，再由独立 fake AcceptanceEvaluator 产生 `PASSED`。Service 和 Web 显示 completed；完整对话、Session、路径、diff 和报告只存在 Node。
 
 ### E2E-NOTIFY
 

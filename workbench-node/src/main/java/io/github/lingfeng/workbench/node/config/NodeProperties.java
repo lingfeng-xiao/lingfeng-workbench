@@ -18,7 +18,13 @@ public record NodeProperties(
         Duration pollInterval,
         Duration requestTimeout,
         String runtimeKind,
-        String wsExecutable,
+        URI wsBaseUri,
+        String wsExpectedVersion,
+        String wsAgent,
+        String wsProviderId,
+        String wsModelId,
+        Duration wsReconcileInterval,
+        Duration wsReconnectDelay,
         Map<String, Path> workspaces,
         Duration heartbeatInterval,
         Duration connectTimeout,
@@ -66,9 +72,20 @@ public record NodeProperties(
             throw new IllegalArgumentException("proxyUri must use HTTP or HTTPS");
         }
         requireIdentifier(runtimeKind, "runtimeKind");
-        if (wsExecutable == null || wsExecutable.isBlank()) {
-            throw new IllegalArgumentException("wsExecutable is required");
+        if (runtimeKind.equals("ws") && wsBaseUri == null) {
+            throw new IllegalArgumentException("wsBaseUri is required for the ws Runtime");
         }
+        if (runtimeKind.equals("ws") && (wsExpectedVersion == null || wsExpectedVersion.isBlank())) {
+            throw new IllegalArgumentException("wsExpectedVersion is required for the ws Runtime");
+        }
+        if (runtimeKind.equals("ws")) {
+            requireIdentifier(wsAgent, "wsAgent");
+            requireIdentifier(wsProviderId, "wsProviderId");
+            requireIdentifier(wsModelId, "wsModelId");
+        }
+        wsReconcileInterval = positiveOrDefault(
+                wsReconcileInterval, Duration.ofSeconds(2), "wsReconcileInterval");
+        wsReconnectDelay = positiveOrDefault(wsReconnectDelay, Duration.ofSeconds(1), "wsReconnectDelay");
         workspaces = workspaces == null ? Map.of() : Map.copyOf(workspaces);
         workspaces.keySet().forEach(key -> requireIdentifier(key, "workspaceRef"));
         fakeScenario = fakeScenario == null || fakeScenario.isBlank() ? "FLOW" : fakeScenario.toUpperCase();
@@ -87,10 +104,13 @@ public record NodeProperties(
             Duration pollInterval,
             Duration requestTimeout,
             String runtimeKind,
-            String wsExecutable,
+            URI wsBaseUri,
+            String wsExpectedVersion,
             Map<String, Path> workspaces) {
         this(nodeId, displayName, serviceBaseUri, bearerToken, stateDirectory, pollInterval, requestTimeout,
-                runtimeKind, wsExecutable, workspaces, Duration.ofSeconds(15), Duration.ofSeconds(10),
+                runtimeKind, wsBaseUri, wsExpectedVersion, "build", "workspace", "gpt-5.6-luna",
+                Duration.ofSeconds(2), Duration.ofSeconds(1),
+                workspaces, Duration.ofSeconds(15), Duration.ofSeconds(10),
                 Duration.ofSeconds(1), Duration.ofSeconds(30), null, null, null, null, "FLOW",
                 Duration.ofMillis(100));
     }

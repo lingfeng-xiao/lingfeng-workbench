@@ -1,6 +1,8 @@
 package io.github.lingfeng.workbench.node;
 
+import io.github.lingfeng.workbench.node.config.AcceptanceProperties;
 import io.github.lingfeng.workbench.node.config.NodeProperties;
+import io.github.lingfeng.workbench.node.context.ContextRegistryProperties;
 import io.github.lingfeng.workbench.node.connection.ServiceConnectionLoop;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
@@ -11,7 +13,9 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean;
 
 @SpringBootApplication
-@EnableConfigurationProperties(NodeProperties.class)
+@EnableConfigurationProperties({
+    NodeProperties.class, ContextRegistryProperties.class, AcceptanceProperties.class
+})
 public class WorkbenchNodeApplication {
 
     public static void main(String[] args) {
