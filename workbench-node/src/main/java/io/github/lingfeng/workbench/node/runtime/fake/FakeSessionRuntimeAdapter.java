@@ -1,6 +1,5 @@
 package io.github.lingfeng.workbench.node.runtime.fake;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.lingfeng.workbench.node.runtime.RuntimeProbe;
 import io.github.lingfeng.workbench.node.runtime.session.InteractionInput;
 import io.github.lingfeng.workbench.node.runtime.session.MissionInput;
@@ -29,14 +28,9 @@ public final class FakeSessionRuntimeAdapter implements SessionRuntimeAdapter, A
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
     private final Map<String, SessionContext> sessions = new ConcurrentHashMap<>();
 
-    public FakeSessionRuntimeAdapter(String scenario, Duration delay, ObjectMapper objectMapper) {
-        this(scenario, delay, objectMapper, null);
-    }
-
-    public FakeSessionRuntimeAdapter(
-            String scenario, Duration delay, ObjectMapper objectMapper, String ignoredMissionDigestOverride) {
+    public FakeSessionRuntimeAdapter(String scenario, Duration eventDelay) {
         this.scenario = scenario;
-        this.delay = delay;
+        this.delay = eventDelay;
     }
 
     @Override

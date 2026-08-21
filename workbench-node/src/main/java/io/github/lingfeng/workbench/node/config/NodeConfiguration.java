@@ -58,7 +58,7 @@ public class NodeConfiguration {
     SessionRuntimeAdapter sessionRuntimeAdapter(NodeProperties properties, ObjectMapper objectMapper) {
         return switch (properties.runtimeKind()) {
             case "fake-session" -> new FakeSessionRuntimeAdapter(
-                    properties.fakeScenario(), properties.fakeTurnDelay(), objectMapper);
+                    properties.fakeScenario(), properties.fakeEventDelay());
             case "ws" -> {
                 OpenCodeClient client = new HttpOpenCodeClient(
                         properties.wsBaseUri(), properties.connectTimeout(),

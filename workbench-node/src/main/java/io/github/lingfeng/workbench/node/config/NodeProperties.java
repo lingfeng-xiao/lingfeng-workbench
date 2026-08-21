@@ -35,7 +35,7 @@ public record NodeProperties(
         Path trustStore,
         Path trustStorePasswordFile,
         String fakeScenario,
-        Duration fakeTurnDelay) {
+        Duration fakeEventDelay) {
 
     private static final Pattern IDENTIFIER = Pattern.compile("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$");
 
@@ -92,7 +92,7 @@ public record NodeProperties(
         if (!fakeScenario.equals("FLOW") && !fakeScenario.equals("INTERACTION")) {
             throw new IllegalArgumentException("fakeScenario must be FLOW or INTERACTION");
         }
-        fakeTurnDelay = positiveOrDefault(fakeTurnDelay, Duration.ofMillis(100), "fakeTurnDelay");
+        fakeEventDelay = positiveOrDefault(fakeEventDelay, Duration.ofMillis(100), "fakeEventDelay");
     }
 
     public NodeProperties(

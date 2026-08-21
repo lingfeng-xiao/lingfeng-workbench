@@ -12,7 +12,7 @@ Hermes 是仓库外部的 Client API 调用方，不参与本仓库业务逻辑�
 
 `v0.5.0-trusted-loop-rc1` 是当前仓库级冻结候选：Service→Node→本机 WS 已改为 OpenCode 原生 HTTP/SSE Session 路径，并闭合 Task、Run、Node 本机客观验收和人工接受。`v0.2.0-mvp1-rc1` 继续作为历史不可变恢复点；其 CLI/三 Turn Runtime 协议不构成当前兼容承诺。
 
-当前候选已通过 Node 39 项、Service 8 项、Web 54 项、三份 OpenAPI strict lint、26 份 v2 fixtures、根 reactor package、真实 WS 可信业务 canary，以及真实 Service/Node JAR 与 Web production Worker 的确定性组合 E2E。该结论证明一个可信闭环，不等同于部署授权或长期稳定性认证。旧 Python 源码仍受独立删除 Gate 保护，未被本轮清理。
+当前候选已通过 Node 39 项、Service 8 项、Web 54 项、三份 OpenAPI strict lint、26 份 v2 fixtures、根 reactor package、真实 WS 可信业务 canary，以及真实 Service/Node JAR 与 Web production Worker 的确定性组合 E2E。该结论证明一个可信闭环，不等同于部署授权或长期稳定性认证。旧 Python/Plugin 执行树已从当前分支删除，历史内容只从不可变 tag 恢复。
 
 权威入口见 [doc/README.md](doc/README.md)，资产状态见 [doc/asset-inventory.md](doc/asset-inventory.md)。Draft PR、Issue、其它分支和旧 Sites D1 均不自动构成当前设计。
 
@@ -20,7 +20,7 @@ Hermes 是仓库外部的 Client API 调用方，不参与本仓库业务逻辑�
 
 - 服务端只保存 Task、WorkItem、Mission、Run、Interaction、Node 的最小控制信息与必要审计；
 - 电脑之间不迁移任务、Runtime Session、工作区或产物；
-- `workbench-node` 对接 runtime-neutral SPI，WS 只是首个适配器；
-- Kanban 不进入目标设计；
+- `workbench-node` 通过收窄的 Session SPI 对接 WS/OpenCode，当前不提供第二条 CLI 执行路径；
+- 当前版本不实现 Kanban 拖拽或自动调度；
 - 公司电脑只运行明确批准的 Node 版本，不开发、提交或推送源码；
 - 合并、部署、权限变化、生产写入和遗留删除分别需要明确 Gate。

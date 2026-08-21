@@ -34,7 +34,7 @@ class RunSupervisorTest {
     @Test
     void oneMissionPromptCompletesOnlyAfterIndependentAcceptancePasses() {
         ControlLoopStore store = store();
-        FakeSessionRuntimeAdapter runtime = new FakeSessionRuntimeAdapter("FLOW", Duration.ofMillis(20), MAPPER);
+        FakeSessionRuntimeAdapter runtime = new FakeSessionRuntimeAdapter("FLOW", Duration.ofMillis(20));
         try (runtime; RunSupervisor supervisor = new RunSupervisor(
                 properties("FLOW"), store, runtime, passedAcceptance())) {
             store.storeCommand(start());
@@ -56,7 +56,7 @@ class RunSupervisorTest {
     void completedRunReleasesTheNodeForASecondDurableRun() {
         ControlLoopStore store = store();
         FakeSessionRuntimeAdapter runtime = new FakeSessionRuntimeAdapter(
-                "FLOW", Duration.ofMillis(20), MAPPER);
+                "FLOW", Duration.ofMillis(20));
         try (runtime; RunSupervisor supervisor = new RunSupervisor(
                 properties("FLOW"), store, runtime, passedAcceptance())) {
             store.storeCommand(start());
@@ -79,7 +79,7 @@ class RunSupervisorTest {
     @Test
     void runtimeIdleWithoutAcceptanceEvidenceIsUncertain() {
         ControlLoopStore store = store();
-        FakeSessionRuntimeAdapter runtime = new FakeSessionRuntimeAdapter("FLOW", Duration.ofMillis(10), MAPPER);
+        FakeSessionRuntimeAdapter runtime = new FakeSessionRuntimeAdapter("FLOW", Duration.ofMillis(10));
         try (runtime; RunSupervisor supervisor = new RunSupervisor(
                 properties("FLOW"), store, runtime, new FailClosedAcceptanceEvaluator())) {
             store.storeCommand(start());
@@ -98,7 +98,7 @@ class RunSupervisorTest {
     void nativeInteractionResponseIsConsumedExactlyOnce() {
         ControlLoopStore store = store();
         FakeSessionRuntimeAdapter runtime = new FakeSessionRuntimeAdapter(
-                "INTERACTION", Duration.ofMillis(20), MAPPER);
+                "INTERACTION", Duration.ofMillis(20));
         try (runtime; RunSupervisor supervisor = new RunSupervisor(
                 properties("INTERACTION"), store, runtime, passedAcceptance())) {
             store.storeCommand(start());
@@ -118,7 +118,7 @@ class RunSupervisorTest {
     @Test
     void successfulNativeAbortWinsBeforeLateIdle() {
         ControlLoopStore store = store();
-        FakeSessionRuntimeAdapter runtime = new FakeSessionRuntimeAdapter("FLOW", Duration.ofSeconds(1), MAPPER);
+        FakeSessionRuntimeAdapter runtime = new FakeSessionRuntimeAdapter("FLOW", Duration.ofSeconds(1));
         try (runtime; RunSupervisor supervisor = new RunSupervisor(
                 properties("FLOW"), store, runtime, passedAcceptance())) {
             store.storeCommand(start());
@@ -140,7 +140,7 @@ class RunSupervisorTest {
         ControlLoopStore store = store();
         store.storeCommand(start());
         store.markOpeningSession("run_001");
-        FakeSessionRuntimeAdapter runtime = new FakeSessionRuntimeAdapter("FLOW", Duration.ofMillis(10), MAPPER);
+        FakeSessionRuntimeAdapter runtime = new FakeSessionRuntimeAdapter("FLOW", Duration.ofMillis(10));
         try (runtime; RunSupervisor supervisor = new RunSupervisor(
                 properties("FLOW"), store, runtime, passedAcceptance())) {
             supervisor.recover();

@@ -31,7 +31,7 @@ workbench:
     ws-reconcile-interval: ${WORKBENCH_WS_RECONCILE_INTERVAL:PT2S}
     ws-reconnect-delay: ${WORKBENCH_WS_RECONNECT_DELAY:PT1S}
     fake-scenario: ${WORKBENCH_FAKE_SCENARIO:FLOW}
-    fake-turn-delay: ${WORKBENCH_FAKE_TURN_DELAY:PT0.1S}
+    fake-event-delay: ${WORKBENCH_FAKE_EVENT_DELAY:PT0.1S}
     workspaces: {}
   context-registry:
     entries: {}

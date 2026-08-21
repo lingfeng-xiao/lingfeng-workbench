@@ -11,7 +11,7 @@ last_verified: 2026-08-21
 
 ## 组合 Gate
 
-最终证据目录为系统临时目录中的 `lingfeng-control-loop-e2e-r8FNiS`。测试使用重新打包的真实 Service JAR、真实 Node JAR、确定性 fake Session Runtime 和 Web production Worker；没有部署、安装 Node、提交、推送、发送消息或写生产数据。
+当前清理后冻结版本证据目录为系统临时目录中的 `lingfeng-control-loop-e2e-PJRk0g`。测试使用 `0.5.0-trusted-loop-rc1` Service/Node JAR、确定性 fake Session Runtime 和 Web production Worker；没有部署、安装 Node、发送消息或写生产数据。
 
 验证链路：
 
@@ -42,12 +42,8 @@ create DRAFT -> edit -> mark READY -> explicit start
 
 第一次双 Run 组合运行保留了失败证据：第二个 Run 已在 Service 创建为 assigned，但 Node `RunSupervisor` 仍持有首个已终态的 `activeCommand`，因而拒绝第二个 Run。修复后，Supervisor 在持久化终态后关闭完成 Session、清理活动绑定，并串行接续已排队的新 Run；runtime event sink 绑定 expected runId，避免旧 Session 的迟到事件污染新 Run。新增单测证明同一 Node 进程可顺序完成两个 durable Run。
 
-## 尚未通过的真实 WS Gate
+## 与真实 WS Gate 的关系
 
-本轮没有把 fake 结果声明为真实 WS 成功。当前存在三个可复现的停止条件：
+本文件证明确定性业务状态机和组合边界。真实 WS 可信业务闭环已另由 `e2e-native-opencode-real-ws.md` 中的 `lingfeng-control-loop-e2e-QTDYy1` 证明：Node 使用本机受信 profile 产生 PASSED，Service Run completed，Task `REVIEW/PENDING -> DONE/ACCEPTED`，Service 重启和 Web render 通过。
 
-1. 当前执行环境没有配置 `WORKBENCH_WS_BASE_URI`，无法通过 ADR-003 要求的显式 loopback endpoint/version Gate；
-2. `workbench.acceptance.profiles` 默认为空，真实 `LocalCommandAcceptanceEvaluator` 对未登记 execution profile 必须以 `UNKNOWN` 收口；
-3. 用户本轮明确禁止 commit/push，而 P1 真实人工验收要求真实 commit SHA 和 PR URL。
-
-因此真实开发 Task 的最终 Gate 需要新的外部副作用授权、可用 endpoint，以及一个受支持 execution profile 的客观 AcceptanceEvaluator。失败样本和未通过项保持原样，不使用 fake 或人工改库补成成功。
+两类证据不能互相替代：确定性 Gate 负责稳定覆盖幂等、重启和多 Run；真实 canary 负责证明 Node→WS 工具执行、原生 idle 与本机验收。连续真实 Run、真实 permission、活动 Run 恢复和受控 SSE 故障恢复仍是稳定性 Gate。

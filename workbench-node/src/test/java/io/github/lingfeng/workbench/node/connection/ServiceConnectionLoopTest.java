@@ -35,7 +35,7 @@ class ServiceConnectionLoopTest {
         NodeProperties properties = properties(null, null, null);
         ControlLoopStore store = new ControlLoopStore(
                 temporaryDirectory, "node_alpha", MAPPER, Clock.systemUTC());
-        FakeSessionRuntimeAdapter runtime = new FakeSessionRuntimeAdapter("FLOW", Duration.ofMillis(200), MAPPER);
+        FakeSessionRuntimeAdapter runtime = new FakeSessionRuntimeAdapter("FLOW", Duration.ofMillis(200));
         RunSupervisor supervisor = new RunSupervisor(
                 properties, store, runtime, new FailClosedAcceptanceEvaluator());
         FakeService service = new FakeService();
@@ -64,7 +64,7 @@ class ServiceConnectionLoopTest {
         ControlLoopStore store = new ControlLoopStore(
                 temporaryDirectory, "node_alpha", MAPPER, Clock.systemUTC());
         store.storeCommand(start());
-        FakeSessionRuntimeAdapter runtime = new FakeSessionRuntimeAdapter("FLOW", Duration.ofMillis(20), MAPPER);
+        FakeSessionRuntimeAdapter runtime = new FakeSessionRuntimeAdapter("FLOW", Duration.ofMillis(20));
         RunSupervisor supervisor = new RunSupervisor(
                 properties, store, runtime, new FailClosedAcceptanceEvaluator());
         FakeService service = new FakeService();

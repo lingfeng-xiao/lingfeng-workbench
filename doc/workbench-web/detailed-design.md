@@ -17,11 +17,11 @@ Web 现以 Task 为主入口，同时保留 W2 的 WorkItem/Interaction/Node 历
 
 Service/Web 只处理安全 alias 和短摘要；严格 parser 拒绝未知字段和未知状态。绝对路径、Session、原始事件、diff、日志和产物不得进入页面模型或浏览器 bundle。D1/R2 继续为 null，不使用 localStorage/sessionStorage。
 
-以下 W2 小节继续约束兼容的 WorkItem/Interaction/Node 历史只读页；与 Task 主入口冲突时以上述 v0.5 增量为准。
+以下小节同时约束 Task 主入口和兼容的 WorkItem/Interaction/Node 历史只读页。
 
 ## 1. 模块职责
 
-Web 是私有、只读、非实时的控制状态观察面。它展示 Service 已持久化的工作进度、阻塞、Node 和通知投影，不创建任务、不解决 Interaction、不读取 Node 或 Runtime。
+Web 是私有 Task 界面和同源 BFF。它展示 Service 已持久化的业务/执行/验收状态，并提供受约束的 Task mutation；它不解决 Runtime Interaction、不读取 Node 或 Runtime，也不自行判断完成。
 
 ## 2. Sites 边界
 
@@ -29,7 +29,7 @@ Web 是私有、只读、非实时的控制状态观察面。它展示 Service �
 - 保留 Vinext/React/TypeScript、`sites()` 插件和 Worker-compatible ESM；
 - `.openai/hosting.json` 的现有 opaque project ID 不变，D1/R2 均为 `null`；
 - 每次发布前独立核验 owner、custom access、唯一允许用户和零外部访客；
-- Sites 服务端校验平台身份后，用只读机器 credential 调 Service；
+- Sites 服务端校验平台身份后，用分离的 read/write credential 调 Service；
 - 浏览器不持有 Service URL、credential 或业务缓存。
 
 详细平台约束继续以 `sites-boundary.md` 为准。
@@ -38,7 +38,7 @@ Web 是私有、只读、非实时的控制状态观察面。它展示 Service �
 
 ### `/`
 
-展示活动 WorkItem、最近终态、等待 Interaction 数、Node 在线摘要和最近同步时间。每个活动项显示当前阶段、短进度、Run 状态和是否等待输入。
+展示活动 Task、业务/执行/验收三轴、attention、Node 在线摘要和最近观测时间。每个活动项显示当前阶段、短进度、Run 状态和允许动作。
 
 ### `/work-items/:id`
 
@@ -54,13 +54,14 @@ Web 是私有、只读、非实时的控制状态观察面。它展示 Service �
 
 ## 4. 服务端数据访问
 
-所有 Service 调用集中在 server-only client：
+所有 Service 调用集中在 server-only client/BFF：
 
 - 请求前验证两个 Sites 身份 header；
-- 固定允许的 Client API v2 路径，禁止任意 URL 代理；
-- 使用只读 scope credential；
+- 固定允许的 Task API v1 与 Client API v2 路径，禁止任意 URL 代理；
+- 读取和 mutation 使用分离的最小 scope credential；
+- mutation 额外校验 Origin、Fetch Metadata、CSRF header、Idempotency-Key 和 expectedVersion；
 - 设置短超时、64 KiB 响应上限和严格 schema 解析；
-- 丢弃未知字段，不把上游对象直接传给组件；
+- 拒绝未知字段，不把上游对象直接传给组件；
 - 401/403/timeout/5xx/非 JSON/合同不匹配映射为有界页面错误；
 - 不记录 Authorization、完整上游 body 或身份 header。
 
@@ -76,7 +77,8 @@ Pragma: no-cache
 组件只接收页面专用 projection：
 
 ```text
-workItemId, title, status
+taskId, title, businessStatus, acceptanceStatus, attentionState
+workItemId, status
 missionId, revision, objective/acceptance short text
 runId, status, phaseCode, progressSummary, resultSummary
 resumable, lastSyncedAt
@@ -85,7 +87,7 @@ node online projection
 notification delivery projection
 ```
 
-禁止进入展示模型：workspaceRef、missionDigest、Session/Turn ID、本地路径、tool call、diff、原始事件、完整日志、完整结果和 Service credential。
+禁止进入展示模型：绝对 workspace、missionDigest、Session ID、本地路径、tool call、diff、原始事件、完整日志、完整结果和 Service credential。Task 只允许安全的 workspaceRef/contextRef alias。
 
 ## 6. 状态表达
 
@@ -98,20 +100,23 @@ notification delivery projection
 
 ## 7. 前端结构
 
-保持当前路由结构，建议内部边界：
+保持当前路由结构和以下内部边界：
 
 ```text
-app/_lib/service-client     server-only HTTP and auth
-app/_lib/contracts          local strict parsers for v2 response
+app/_lib/task-service       server-only Task HTTP and auth
+app/_lib/task-bff           identity/origin/CSRF/idempotency boundary
+app/_lib/task-contracts     strict Task parsers
+app/_lib/workbench-service  legacy read-only Client v2 adapter
+app/_lib/contracts          strict Client v2 parsers
 app/_lib/presentation       projection and labels
 app/_components             stateless display components
 app/*                       route composition
 ```
 
-不引入全局客户端状态库、前端数据库、localStorage/sessionStorage 或第二套领域模型。自动刷新不是 W2 正确性要求；如后续增加，只能重新请求 no-store 页面数据。
+不引入全局客户端状态库、前端数据库、localStorage/sessionStorage 或第二套领域模型。自动刷新只重新请求 no-store/ETag 页面数据。
 
 ## 8. 测试与验收
 
-使用 fake Service 覆盖：身份缺失、只读 scope、401/403/timeout/502、超大响应、未知字段和状态、空/运行/等待/失败/uncertain/离线页面、同步时间、通知失败投影以及敏感字段不渲染。保持 lint、test、build 和 Sites metadata 校验。
+使用 fake Service 覆盖：身份缺失、读写 scope、Origin/CSRF/Fetch Metadata、幂等与 expectedVersion、401/403/409/timeout/502、超大响应、未知字段和状态、Task 三轴、历史页以及敏感字段不渲染。保持 lint、test、build 和 Sites metadata 校验。
 
 模块测试不调用真实 Service、不修改 Sites 权限、不发布、不写 D1/R2，也不需要微信或 Runtime。

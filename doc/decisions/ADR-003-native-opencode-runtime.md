@@ -31,7 +31,7 @@ last_verified: 2026-08-20
 - architecture：本 ADR、全局时序和 Node→Runtime 语义；Service→Node v2 合同不因 Runtime 更换而扩散字段。
 - workbench-node：endpoint 配置/探测、OpenCode HTTP/SSE 客户端、Session 绑定、事件投影、Interaction、abort、reconciliation、验收边界和本地证据。
 - workbench-service：保持既有 Run/Interaction/Outbox 业务状态机，不解释 OpenCode 状态。
-- workbench-web：保持只读 Service 投影，不接触 Runtime。
+- workbench-web：通过 Service Task API 提供业务操作和安全投影，不接触 Runtime。
 - integration：用 fake OpenCode HTTP/SSE server 验证原生协议，不再伪造三 Turn 或 terminal 文本。
 
 ## 错误边界

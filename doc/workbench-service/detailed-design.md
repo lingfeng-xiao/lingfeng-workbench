@@ -86,7 +86,7 @@ Service 到 Node 的内部 durable record，不是新业务聚合。包含 comma
 
 ## 4. 关键事务
 
-### 创建任务
+### Client v2 创建执行项
 
 同一事务内：校验幂等键和请求 digest → 创建 WorkItem → 创建 Mission/revision/digest → 创建 Run → 创建 START_RUN command → 写短审计。事务失败不得留下半个任务。
 
@@ -135,7 +135,7 @@ timeline_event
 - v2 按 `contracts/control-loop-v2.md` 作为唯一 API/协议；
 - 旧路径不重定向、不兼容解析，也不共享 DTO；
 - Hermes scope 拆分为 create、resolve、notification pull/report 和 read；
-- Sites credential 只有 read；
+- Web BFF 使用分离的 Task read/write credential；兼容 Client v2 页面 credential 仍只有 read；
 - Node credential 绑定唯一 nodeId，只能 poll 自己的命令和上报自己的事件；
 - 浏览器永不持有任何 Service credential。
 
