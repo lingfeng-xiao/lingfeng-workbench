@@ -23,7 +23,18 @@ workbench:
     trust-store: ${WORKBENCH_NODE_TRUST_STORE:}
     trust-store-password-file: ${WORKBENCH_NODE_TRUST_STORE_PASSWORD_FILE:}
     runtime-kind: ${WORKBENCH_RUNTIME_KIND:ws}
-    ws-executable: ${WORKBENCH_WS_EXECUTABLE:ws}
+    ws-base-uri: ${WORKBENCH_WS_BASE_URI:}
+    ws-expected-version: ${WORKBENCH_WS_EXPECTED_VERSION:0.0.0--202608171122}
+    ws-agent: ${WORKBENCH_WS_AGENT:build}
+    ws-provider-id: ${WORKBENCH_WS_PROVIDER_ID:workspace}
+    ws-model-id: ${WORKBENCH_WS_MODEL_ID:gpt-5.6-luna}
+    ws-reconcile-interval: ${WORKBENCH_WS_RECONCILE_INTERVAL:PT2S}
+    ws-reconnect-delay: ${WORKBENCH_WS_RECONNECT_DELAY:PT1S}
     fake-scenario: ${WORKBENCH_FAKE_SCENARIO:FLOW}
     fake-turn-delay: ${WORKBENCH_FAKE_TURN_DELAY:PT0.1S}
     workspaces: {}
+  context-registry:
+    entries: {}
+    allowed-roots: []
+  acceptance:
+    profiles: {}

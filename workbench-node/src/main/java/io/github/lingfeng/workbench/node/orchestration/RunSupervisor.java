@@ -1,17 +1,21 @@
 package io.github.lingfeng.workbench.node.orchestration;
 
 import io.github.lingfeng.workbench.node.config.NodeProperties;
+import io.github.lingfeng.workbench.node.context.ContextRegistry;
+import io.github.lingfeng.workbench.node.context.ContextRegistry.ResolvedContext;
+import io.github.lingfeng.workbench.node.context.ContextRegistryProperties;
 import io.github.lingfeng.workbench.node.localstate.ControlLoopStore;
 import io.github.lingfeng.workbench.node.protocol.v2.NodeCommand;
 import io.github.lingfeng.workbench.node.runtime.session.InteractionInput;
+import io.github.lingfeng.workbench.node.runtime.session.MissionInput;
 import io.github.lingfeng.workbench.node.runtime.session.NormalizedRuntimeEvent;
 import io.github.lingfeng.workbench.node.runtime.session.SessionContext;
 import io.github.lingfeng.workbench.node.runtime.session.SessionHandle;
 import io.github.lingfeng.workbench.node.runtime.session.SessionInspection;
 import io.github.lingfeng.workbench.node.runtime.session.SessionRuntimeAdapter;
-import io.github.lingfeng.workbench.node.runtime.session.TurnInput;
 import java.nio.file.Path;
-import java.util.concurrent.CompletionStage;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -22,21 +26,40 @@ import org.slf4j.LoggerFactory;
 public final class RunSupervisor implements AutoCloseable {
 
     private static final Logger logger = LoggerFactory.getLogger(RunSupervisor.class);
-    private static final int REQUIRED_FAKE_TURNS = 3;
 
     private final NodeProperties properties;
     private final ControlLoopStore store;
     private final SessionRuntimeAdapter runtime;
+    private final AcceptanceEvaluator acceptanceEvaluator;
+    private final ContextRegistry contextRegistry;
     private final ExecutorService eventQueue;
     private NodeCommand.StartRun activeCommand;
+    private SessionContext sessionContext;
     private SessionHandle sessionHandle;
-    private int currentTurn;
+    private NodeCommand.StartRun pendingStart;
     private boolean terminal;
+    private boolean acceptancePending;
 
-    public RunSupervisor(NodeProperties properties, ControlLoopStore store, SessionRuntimeAdapter runtime) {
+    public RunSupervisor(
+            NodeProperties properties,
+            ControlLoopStore store,
+            SessionRuntimeAdapter runtime,
+            AcceptanceEvaluator acceptanceEvaluator) {
+        this(properties, store, runtime, acceptanceEvaluator,
+                new ContextRegistry(properties, new ContextRegistryProperties(Map.of(), List.of())));
+    }
+
+    public RunSupervisor(
+            NodeProperties properties,
+            ControlLoopStore store,
+            SessionRuntimeAdapter runtime,
+            AcceptanceEvaluator acceptanceEvaluator,
+            ContextRegistry contextRegistry) {
         this.properties = properties;
         this.store = store;
         this.runtime = runtime;
+        this.acceptanceEvaluator = acceptanceEvaluator;
+        this.contextRegistry = contextRegistry;
         this.eventQueue = Executors.newSingleThreadExecutor(runnable ->
                 Thread.ofPlatform().daemon(true).name("run-supervisor").unstarted(runnable));
     }
@@ -61,51 +84,47 @@ public final class RunSupervisor implements AutoCloseable {
 
     private void startRun(NodeCommand.StartRun command) {
         if (activeCommand != null && !activeCommand.binding().runId().equals(command.binding().runId())) {
-            logger.warn("Rejecting second active Run runId={}", command.binding().runId());
+            if (terminal && pendingStart == null) {
+                pendingStart = command;
+                logger.info("Queued next Run while the terminal Session closes runId={}",
+                        command.binding().runId());
+            } else {
+                logger.warn("Rejecting second active Run runId={}", command.binding().runId());
+            }
             return;
         }
         activeCommand = command;
-        Path workspace;
         try {
             if (!properties.runtimeKind().equals(command.runtimeKind())) {
                 throw new IllegalArgumentException("Command runtimeKind is not configured on this Node");
             }
-            workspace = properties.resolveWorkspace(command.workspaceRef());
+            ResolvedContext resolved = contextRegistry.resolve(command.workspaceRef(), command.contextRefs());
+            sessionContext = new SessionContext(
+                    command, resolved.workspace(), resolved.contextPaths(),
+                    store.evidenceDirectory(command.binding().runId()));
         } catch (RuntimeException exception) {
             recordUnknown("Run configuration failed closed: " + exception.getMessage());
             return;
         }
         store.markOpeningSession(command.binding().runId());
-        SessionContext context = new SessionContext(
-                command, workspace, store.evidenceDirectory(command.binding().runId()));
-        runtime.openSession(context, runtimeSink()).whenComplete((openedHandle, failure) ->
+        runtime.openSession(sessionContext, runtimeSink()).whenComplete((openedHandle, failure) ->
                 eventQueue.execute(() -> finishOpen(openedHandle, failure)));
     }
 
     private void finishOpen(SessionHandle openedHandle, Throwable failure) {
-        if (failure != null) {
+        if (failure != null || openedHandle == null) {
             recordUnknown("Runtime Session could not be opened");
             return;
         }
         sessionHandle = openedHandle;
-        store.saveSession(activeCommand.binding().runId(), openedHandle.opaqueReference(),
-                runtime.capabilities().supports("resume"));
-        store.recordRunStarted(activeCommand.binding().runId(), runtime.capabilities().supports("resume"));
-        submitTurn(1);
-    }
-
-    private void submitTurn(int turnNumber) {
-        if (terminal || sessionHandle == null) {
-            return;
-        }
-        currentTurn = turnNumber;
-        String turnId = "turn-" + turnNumber;
-        store.recordTurn(activeCommand.binding().runId(), turnId, turnNumber, "submitted");
-        TurnInput input = new TurnInput(turnId, turnNumber,
-                turnNumber == 1 ? activeCommand.objective() : "Continue the same immutable Mission");
-        runtime.submitTurn(sessionHandle, input, runtimeSink()).whenComplete((unused, failure) -> {
-            if (failure != null) {
-                eventQueue.execute(() -> recordUnknown("Runtime rejected a Turn"));
+        store.saveSession(activeCommand.binding().runId(), openedHandle, true);
+        store.recordRunStarted(activeCommand.binding().runId(), true);
+        MissionInput mission = new MissionInput(
+                activeCommand.objective(), activeCommand.acceptanceSummary(),
+                activeCommand.authorizedSideEffectsSummary(), activeCommand.executionProfile());
+        runtime.submitMission(sessionHandle, mission, runtimeSink()).whenComplete((unused, submitFailure) -> {
+            if (submitFailure != null) {
+                eventQueue.execute(() -> recordUnknown("Runtime rejected the Mission prompt"));
             }
         });
     }
@@ -117,15 +136,7 @@ public final class RunSupervisor implements AutoCloseable {
         InteractionInput input = new InteractionInput(
                 response.commandId(), response.interactionId(), response.checkpointId(),
                 response.decision(), response.responseSummary());
-        CompletionStage<Void> delivery;
-        try {
-            delivery = runtime.provideInteractionResponse(sessionHandle, input, runtimeSink());
-        } catch (RuntimeException exception) {
-            logger.warn("Runtime did not accept durable Interaction response yet runId={} commandId={}",
-                    response.binding().runId(), response.commandId());
-            return;
-        }
-        delivery.whenComplete((unused, failure) ->
+        runtime.provideInteractionResponse(sessionHandle, input, runtimeSink()).whenComplete((unused, failure) ->
                 eventQueue.execute(() -> {
                     if (failure != null) {
                         logger.warn("Runtime did not consume durable Interaction response runId={} commandId={}",
@@ -144,80 +155,114 @@ public final class RunSupervisor implements AutoCloseable {
             recordInterrupted("Run cancelled before an Agent Session was available");
             return;
         }
-        runtime.cancel(sessionHandle, cancel.reasonSummary(), runtimeSink()).whenComplete((unused, failure) -> {
-            if (failure != null) {
-                eventQueue.execute(() -> recordUnknown("Runtime cancellation outcome is unknown"));
-            }
-        });
+        runtime.cancel(sessionHandle, cancel.reasonSummary(), runtimeSink()).whenComplete((unused, failure) ->
+                eventQueue.execute(() -> {
+                    if (failure != null) {
+                        recordUnknown("Runtime cancellation outcome is unknown");
+                    } else {
+                        recordInterrupted("OpenCode Session was aborted");
+                    }
+                }));
     }
 
-    private void handleRuntimeEvent(NormalizedRuntimeEvent event) {
-        if (terminal || activeCommand == null) {
+    private void handleRuntimeEvent(String expectedRunId, NormalizedRuntimeEvent event) {
+        if (terminal || activeCommand == null
+                || !activeCommand.binding().runId().equals(expectedRunId)) {
             return;
         }
         String runId = activeCommand.binding().runId();
-        if (event instanceof NormalizedRuntimeEvent.TurnAccepted accepted) {
-            store.recordTurn(runId, accepted.turnId(), turnNumber(accepted.turnId()), "accepted");
-        } else if (event instanceof NormalizedRuntimeEvent.PhaseChanged phase) {
+        if (event instanceof NormalizedRuntimeEvent.PhaseChanged phase) {
             store.recordPhase(runId, phase.phaseCode(), phase.summary());
         } else if (event instanceof NormalizedRuntimeEvent.ProgressUpdated progress) {
             store.recordProgress(runId, progress.summary());
         } else if (event instanceof NormalizedRuntimeEvent.InteractionRequested interaction) {
             store.recordInteraction(runId, interaction.interactionId(), interaction.checkpointId(),
                     interaction.promptSummary(), interaction.allowedDecisions(), interaction.resumable());
-            runtime.pause(sessionHandle, runtimeSink());
-        } else if (event instanceof NormalizedRuntimeEvent.TurnFinished finished) {
-            int turnNumber = turnNumber(finished.turnId());
-            store.recordTurn(runId, finished.turnId(), turnNumber, "finished");
-            if (turnNumber < REQUIRED_FAKE_TURNS) {
-                submitTurn(turnNumber + 1);
-            }
+        } else if (event instanceof NormalizedRuntimeEvent.RuntimeIdle idle) {
+            evaluateAcceptance(idle.resultSummary());
         } else if (event instanceof NormalizedRuntimeEvent.SessionFailed failed) {
             recordUnknown(failed.summary());
-        } else if (event instanceof NormalizedRuntimeEvent.Terminal runtimeTerminal) {
-            recordTerminal(runtimeTerminal);
         }
     }
 
-    private void recordTerminal(NormalizedRuntimeEvent.Terminal runtimeTerminal) {
-        if (!activeCommand.binding().missionDigest().equals(runtimeTerminal.missionDigest())) {
-            recordUnknown("Runtime terminal mission digest did not match the immutable Mission");
+    private void evaluateAcceptance(String runtimeSummary) {
+        if (acceptancePending || terminal) {
             return;
         }
-        NormalizedRuntimeEvent.RuntimeOutcome outcome = runtimeTerminal.runtimeOutcome();
-        NormalizedRuntimeEvent.AcceptanceStatus acceptance = runtimeTerminal.acceptanceStatus();
-        if (acceptance == NormalizedRuntimeEvent.AcceptanceStatus.PASSED
-                && outcome != NormalizedRuntimeEvent.RuntimeOutcome.SUCCEEDED) {
-            recordUnknown("Runtime claimed PASSED without SUCCEEDED");
-            return;
-        }
-        terminal = store.tryRecordTerminal(
-                activeCommand.binding().runId(), outcome, acceptance, runtimeTerminal.resultSummary());
+        acceptancePending = true;
+        acceptanceEvaluator.evaluate(sessionContext, sessionHandle, runtimeSummary)
+                .whenComplete((result, failure) -> eventQueue.execute(() -> {
+                    acceptancePending = false;
+                    if (failure != null || result == null) {
+                        recordUnknown("Independent acceptance evaluation failed");
+                        return;
+                    }
+                    completeTerminal(
+                            activeCommand.binding().runId(),
+                            NormalizedRuntimeEvent.RuntimeOutcome.SUCCEEDED,
+                            result.status(), result.summary());
+                }));
     }
 
     private void recordUnknown(String summary) {
-        terminal = store.tryRecordTerminal(
+        completeTerminal(
                 activeCommand.binding().runId(), NormalizedRuntimeEvent.RuntimeOutcome.UNKNOWN,
                 NormalizedRuntimeEvent.AcceptanceStatus.UNKNOWN, summary);
     }
 
     private void recordInterrupted(String summary) {
-        terminal = store.tryRecordTerminal(
+        completeTerminal(
                 activeCommand.binding().runId(), NormalizedRuntimeEvent.RuntimeOutcome.INTERRUPTED,
                 NormalizedRuntimeEvent.AcceptanceStatus.UNKNOWN, summary);
     }
 
+    private void completeTerminal(
+            String runId,
+            NormalizedRuntimeEvent.RuntimeOutcome runtimeOutcome,
+            NormalizedRuntimeEvent.AcceptanceStatus acceptanceStatus,
+            String summary) {
+        terminal = store.tryRecordTerminal(runId, runtimeOutcome, acceptanceStatus, summary);
+        if (!terminal) {
+            return;
+        }
+        SessionHandle completedSession = sessionHandle;
+        if (completedSession == null) {
+            resetAfterTerminal();
+            return;
+        }
+        runtime.closeSession(completedSession, ignored -> { }).whenComplete((unused, failure) ->
+                eventQueue.execute(() -> {
+                    if (failure != null) {
+                        logger.warn("Terminal Session close failed runId={}", runId);
+                    }
+                    resetAfterTerminal();
+                }));
+    }
+
+    private void resetAfterTerminal() {
+        NodeCommand.StartRun next = pendingStart;
+        pendingStart = null;
+        activeCommand = null;
+        sessionContext = null;
+        sessionHandle = null;
+        terminal = false;
+        acceptancePending = false;
+        if (next != null) {
+            startRun(next);
+        }
+    }
+
     private Consumer<NormalizedRuntimeEvent> runtimeSink() {
+        String expectedRunId = activeCommand.binding().runId();
         return event -> {
             if (!eventQueue.isShutdown()) {
-                eventQueue.execute(() -> handleRuntimeEvent(event));
+                eventQueue.execute(() -> handleRuntimeEvent(expectedRunId, event));
             }
         };
     }
 
     private void recover(ControlLoopStore.RecoveryRun recovery) {
         activeCommand = recovery.command();
-        currentTurn = recovery.currentTurn();
         if (recovery.sessionHandle() == null) {
             if (recovery.state().equals("received")) {
                 startRun(recovery.command());
@@ -226,46 +271,36 @@ public final class RunSupervisor implements AutoCloseable {
             }
             return;
         }
-        sessionHandle = new SessionHandle(recovery.sessionHandle());
-        if (!recovery.resumable() || !runtime.capabilities().supports("resume")) {
-            recordUnknown("Runtime does not support recovery of the durable Agent Session");
+        try {
+            ResolvedContext resolved = contextRegistry.resolve(
+                    recovery.command().workspaceRef(), recovery.command().contextRefs());
+            sessionContext = new SessionContext(
+                    recovery.command(), resolved.workspace(), resolved.contextPaths(),
+                    recovery.evidenceDirectory());
+        } catch (RuntimeException exception) {
+            recordUnknown("Node could not restore the original workspace binding");
             return;
         }
-        runtime.inspect(sessionHandle).whenComplete((inspection, inspectFailure) ->
-                eventQueue.execute(() -> finishInspect(recovery, inspection, inspectFailure)));
+        sessionHandle = new SessionHandle(
+                recovery.sessionHandle(), recovery.runtimeIdentity(), recovery.runtimeVersion(),
+                recovery.workspaceDirectory());
+        runtime.reattach(sessionHandle, sessionContext, runtimeSink())
+                .whenComplete((inspection, failure) -> eventQueue.execute(() ->
+                        finishReattach(recovery, inspection, failure)));
     }
 
-    private void finishInspect(
+    private void finishReattach(
             ControlLoopStore.RecoveryRun recovery, SessionInspection inspection, Throwable failure) {
-        if (failure != null || inspection == null || !inspection.sameSession()
-                || !inspection.alive() || !inspection.resumable()) {
+        if (failure != null || inspection == null || !inspection.sameSession() || !inspection.alive()) {
             recordUnknown("Runtime could not prove the original Agent Session identity");
             return;
         }
-        String checkpoint = recovery.checkpointId() == null ? "restart" : recovery.checkpointId();
-        runtime.resume(sessionHandle, checkpoint, runtimeSink()).whenComplete((unused, resumeFailure) ->
-                eventQueue.execute(() -> {
-                    if (resumeFailure != null) {
-                        recordUnknown("Runtime failed to resume the original Agent Session");
-                        return;
-                    }
-                    if (recovery.state().equals("opening_session")) {
-                        store.recordRunStarted(recovery.command().binding().runId(), true);
-                    }
-                    if (recovery.state().equals("waiting_interaction")) {
-                        store.storedInteractionResponse(recovery.command().binding().runId())
-                                .ifPresent(this::provideInteractionResponse);
-                    } else if (recovery.currentTurn() == 0) {
-                        submitTurn(1);
-                    }
-                }));
-    }
-
-    private static int turnNumber(String turnId) {
-        try {
-            return Integer.parseInt(turnId.substring(turnId.lastIndexOf('-') + 1));
-        } catch (RuntimeException exception) {
-            throw new IllegalArgumentException("Runtime emitted an invalid local Turn ID", exception);
+        if (recovery.state().equals("opening_session")) {
+            store.recordRunStarted(recovery.command().binding().runId(), true);
+        }
+        if (recovery.state().equals("waiting_interaction")) {
+            store.storedInteractionResponse(recovery.command().binding().runId())
+                    .ifPresent(this::provideInteractionResponse);
         }
     }
 

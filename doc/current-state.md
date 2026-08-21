@@ -1,13 +1,24 @@
 ---
 status: current-evidence
 authority: main-evidence
-source_ref: main@510e4dc0 plus DF-0.4 real-development branch verification
+source_ref: v0.5.0-trusted-loop-rc1
 owner: architecture
 superseded_by: null
-last_verified: 2026-08-20
+last_verified: 2026-08-21
 ---
 
 # 当前状态
+
+- v0.5 P1 冻结候选已完成可测试的 Task 耐久业务纵切：独立 `/api/tasks/v1`、前向 Liquibase、TaskEvent 同事务 append、显式 start 原子创建既有 WorkItem/Mission/Run/START_RUN、Node ContextRegistry fail-closed、本机 alias/context 解析、Run 终态投影、同源 Web BFF、Task 池/详情/关注页、4 秒 ETag 条件刷新、人工验收和归档/恢复均已实现。Task/Run/Acceptance 三轴保持独立，successful Run 只进入 `REVIEW/PENDING`。当前验证为 Service 8 项 + Node 39 项全通过；Web lint/build 与 54 项测试、三份 OpenAPI strict lint、26 份 v2 fixtures 均通过。根 reactor 因本机内存不能稳定 fork Service 测试 JVM，但模块测试分别通过，统一 reactor package 通过。
+- 2026-08-21 最终 fake 组合证据 `lingfeng-control-loop-e2e-NkUKdy` 使用 `0.5.0-trusted-loop-rc1` 真实 Service/Node JAR 和 Web production Worker，从 DRAFT 创建/编辑/READY（零 WorkItem）开始，经幂等 start、4 条进度、`REVIEW/PENDING`、退回、第二个独立 Run、人工 accept、archive/restore、Service 重启，最终保留 `ARCHIVED/ACCEPTED`、2 个 Run 和 20 条 Timeline；FLOW/NOTIFY、同 Session Interaction、重复 delivery/resolve/ACK 幂等和 Service SQLite/WAL 敏感扫描均通过。较早的通过样本 `lingfeng-control-loop-e2e-fYa1qb` 曾发现并促成修复 `RunSupervisor` 首个终态后未释放 Node、导致后续 Run 永久 assigned 的缺陷；现在终态 Session 关闭后可串行启动下一 Run，并用 runId 绑定 event sink 隔离迟到事件。
+- v0.5 真实 WS 可信业务闭环已在系统临时 Maven canary 中通过。证据 `lingfeng-control-loop-e2e-QTDYy1`：Service Task `task_64e1eae54b9e467d90b57eea77a82b52` 显式启动 Run `run_265de6a7893b43489f2e73e71f6a3792`，Node 连接本机 WS `0.0.0--202608031304`，唯一 Session `ses_fdd50c1bfffecr1wZUiihzisso` 把 `Calculator.add` 从减法修为加法并原生 idle；Node 的受信 profile 独立执行 `mvn -DforkCount=0 test`，`acceptance-report.json` 为 PASSED、exit 0 且 Surefire 产物存在。Service Run completed，Task 先进入 `REVIEW/PENDING`，显式接受后为 `DONE/ACCEPTED`；Service 同 SQLite 重启和 Web production render 前后通过，Service 敏感数据扫描未发现 Session、workspace、原始事件或 conversation。
+- 真实 Gate 还暴露并修复两处边界：WS endpoint 消失时 SSE failure 曾扇出为每分钟数千事件，现为单计划、指数退避和告警去重；status map 短暂缺少正在 busy 的 Session 曾被误判 idle，现必须等待显式 idle 或最终 assistant message 的 completed/non-tool-calls 证据。另确认本机 WS 的 `bash.proxy.execute.requested` 依赖编辑器 terminal proxy，不能作为 headless Node 验收路径；测试和业务验收由 Node 本机 profile 执行。默认 profiles 仍为空，未登记 profile 继续 UNKNOWN。候选代码和文档冻结为 `v0.5.0-trusted-loop-rc1`；没有部署、安装或生产写入。Task accept 中的 `0000000`/`example.test` 只模拟本地 E2E 人工接受，不宣称 canary 自身创建了真实 commit/PR 交付。
+
+- 中间阶段记录（已被前述可信业务闭环取代）：候选工作树按 ADR-003 重建 Node→WS，删除旧 `ws run --format json`、固定三 Turn、`lingfeng.terminal`、摘要 JSON 扫描和 CLI 进程控制，改为显式 loopback endpoint/version Gate、OpenCode HTTP/SSE、一次 Mission prompt、原生 permission/question/abort、Session server/version/workspace 绑定和独立 AcceptanceEvaluator。该阶段曾因默认 `FailClosedAcceptanceEvaluator` 返回 `UNKNOWN` 而不能让完整业务 Run 自动 completed；随后已增加 Node 本机受信 acceptance profile，并由前述 `lingfeng-control-loop-e2e-QTDYy1` 真实闭环证明。此阶段的 question、completed Session reattach、模型 Gate、endpoint fail-closed 和 abort 竞态证据仍有效；连续真实 Run、真实 permission、活动 Run 重启恢复和受控 SSE 故障恢复仍是后续稳定性 Gate。详细证据见 `testing/e2e-native-opencode-real-ws.md`。
+
+## 重建前 main 基线与历史验证
+
+以下记录用于解释 `main@a319dc8` 的来源和旧 CLI 协议曾暴露的问题；它们不再描述 ADR-003 工作树的执行路径。
 
 - `DF-0.3-control-loop` 已通过 PR #21 合并；真实 WS/Node 收口已通过 PR #22 合并到 `main@510e4dc0cb14798f5c8144676b796dbc6fade69e`。Client API v2、Node Protocol v2、Service/Node/Web v2、出站 HTTPS 控制环、会话式 Runtime SPI、Interaction/通知闭环均已编码；当前源码树不存在旧 API controller/DTO/client/worker/config switch、旧 OpenAPI 或 lint 入口。尚未部署、安装或生产验收，不属于当前线上运行能力。
 - 本地验证使用 OpenJDK `21.0.12.1`：Service 5 项、Node 33 项、Web 32 项测试全部通过；根 Maven reactor package、两份 v2 OpenAPI strict lint、26 份 fixtures、Web lint/test/build 通过。最终 `E2E-FLOW` 证据目录为 `lingfeng-control-loop-e2e-XKKaVB`，使用真实 Service/Node JAR、fake session Runtime 和 Web production Worker 完成 3 Turn、Service 真实中断、outbox 恢复重放和 digest 匹配的 `SUCCEEDED/PASSED`；`E2E-NOTIFY` 完成通知投递、fake Hermes resolve、Node durable ACK、同一 Session 恢复和重复 delivery/resolve/ACK 幂等。详细证据见 `testing/e2e-v0.3-control-loop.md`。

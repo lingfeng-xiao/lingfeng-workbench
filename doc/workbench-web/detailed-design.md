@@ -1,13 +1,23 @@
 ---
 status: authoritative
-authority: DF-0.3-control-loop
-source_ref: web-design-w2
+authority: DF-0.5-business-loop
+source_ref: web-design-w3-task-p1
 owner: workbench-web
 superseded_by: null
-last_verified: 2026-08-20
+last_verified: 2026-08-21
 ---
 
-# workbench-web 详细设计 W2
+# workbench-web 详细设计 W3
+
+## 0. v0.5 P1 增量
+
+Web 现以 Task 为主入口，同时保留 W2 的 WorkItem/Interaction/Node 历史只读页。新增 `/` Task 池、`/tasks/new`、`/tasks/:id` 和 `/attention`。Task 详情展示业务/执行/验收三轴、Node 在线性、lastObservedAt、stale、全部短 Run 历史与 append-only Timeline；`IN_PROGRESS` 时使用 ETag 每 4 秒条件读取，页面隐藏时降为 15 秒，离开活动态后停止高频刷新。
+
+浏览器只访问固定同源 `/api/tasks` BFF。BFF 校验 Sites 身份、同源 Origin、Fetch Metadata、`X-Workbench-CSRF: 1` 和 Idempotency-Key，以身份摘要生成稳定 actor，并使用独立 read/write credential 调 `/api/tasks/v1`；浏览器不能提供 actor、Service URL 或 credential。create 还必须显式确认数据边界。操作按钮只按 Service `allowedActions` 渲染，create 以外 mutation 转发 expectedVersion，409 只显示安全冲突文案。
+
+Service/Web 只处理安全 alias 和短摘要；严格 parser 拒绝未知字段和未知状态。绝对路径、Session、原始事件、diff、日志和产物不得进入页面模型或浏览器 bundle。D1/R2 继续为 null，不使用 localStorage/sessionStorage。
+
+以下 W2 小节继续约束兼容的 WorkItem/Interaction/Node 历史只读页；与 Task 主入口冲突时以上述 v0.5 增量为准。
 
 ## 1. 模块职责
 

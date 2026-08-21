@@ -22,8 +22,8 @@ assert.ok(javaHome, "JAVA_HOME must point to a Java 21 JDK");
 
 const javaExecutable = join(javaHome, "bin", process.platform === "win32" ? "java.exe" : "java");
 const keytoolExecutable = join(javaHome, "bin", process.platform === "win32" ? "keytool.exe" : "keytool");
-const serviceJar = join(repositoryDirectory, "workbench-service", "target", "workbench-service-0.2.0-mvp1-rc1.jar");
-const nodeJar = join(repositoryDirectory, "workbench-node", "target", "workbench-node-0.2.0-mvp1-rc1.jar");
+const serviceJar = join(repositoryDirectory, "workbench-service", "target", "workbench-service-0.5.0-trusted-loop-rc1.jar");
+const nodeJar = join(repositoryDirectory, "workbench-node", "target", "workbench-node-0.5.0-trusted-loop-rc1.jar");
 const webWorker = join(repositoryDirectory, "workbench-web", "dist", "server", "index.js");
 
 const creatorToken = "creator-local-e2e-token-0000000000000001";
@@ -39,7 +39,10 @@ const evidenceRoot = await mkdtemp(join(tmpdir(), "lingfeng-control-loop-e2e-"))
 const tls = await createLocalTls(evidenceRoot);
 const realWsDevelopmentMode = process.argv.includes("--real-ws-development");
 const realWsMode = realWsDevelopmentMode || process.argv.includes("--real-ws");
-const realWsExecutable = realWsMode ? resolveWsExecutable() : null;
+const realWsBaseUri = realWsMode ? requiredEnvironment("WORKBENCH_WS_BASE_URI") : null;
+const realWsExpectedVersion = realWsMode
+  ? (process.env.WORKBENCH_WS_EXPECTED_VERSION?.trim() || "0.0.0--202608171122")
+  : null;
 const realWsObservationMs = realWsMode ? resolveRealWsObservationMs(realWsDevelopmentMode) : null;
 const realWsScenario = realWsMode ? resolveRealWsScenario(realWsDevelopmentMode) : null;
 if (realWsDevelopmentMode) {
@@ -56,6 +59,7 @@ const summary = realWsMode
       executedAt: new Date().toISOString(),
       evidenceRoot,
       javaVersion: javaVersionLine(runChecked(javaExecutable, ["-version"]).stderr),
+      task: await runTaskBusinessLoopScenario(join(evidenceRoot, "task-business-loop")),
       flow: await runFlowScenario(join(evidenceRoot, "flow")),
       notify: await runNotificationScenario(join(evidenceRoot, "notify")),
     };
@@ -65,7 +69,7 @@ console.log(realWsMode
   ? summary.realWs.blocker
     ? "Real WS control-loop attempt ended without completion; inspect realWs.blocker and blocker evidence."
     : "Real WS control-loop attempt verified persistence across Service restart; inspect realWs.proof."
-  : "E2E-FLOW and E2E-NOTIFY passed with real Service/Node JARs and the Web production build.");
+  : "E2E-TASK, E2E-FLOW, and E2E-NOTIFY passed with real Service/Node JARs and the Web production build.");
 
 async function runRealWsScenario(scenarioDirectory) {
   await mkdir(scenarioDirectory, { recursive: true });
@@ -86,57 +90,82 @@ async function runRealWsScenario(scenarioDirectory) {
     workspace,
     port,
     runtimeKind: "ws",
-    wsExecutable: realWsExecutable,
+    wsBaseUri: realWsBaseUri,
+    wsExpectedVersion: realWsExpectedVersion,
+    acceptanceProfile: realWsScenario.acceptanceProfile,
   });
 
   try {
     await waitForNodeRegistration(port);
-    const created = await createWorkItem(port, {
-      idempotencyKey: "real-ws-create-key",
+    const created = await createTask(port, "real-ws-task-create-key", {
       title: realWsScenario.title,
       runtimeKind: "ws",
       objective: realWsScenario.objective,
       acceptanceSummary: realWsScenario.acceptanceSummary,
-      authorizedSideEffectsSummary: realWsScenario.authorizedSideEffectsSummary,
+      sideEffectSummary: realWsScenario.authorizedSideEffectsSummary,
+      executionProfile: realWsScenario.executionProfile,
     });
+    let task = await getTask(port, created.taskId);
+    task = await taskAction(port, created.taskId, "mark-ready", "real-ws-task-ready-key",
+      task.version, "Freeze the real WS canary contract without starting execution");
+    const started = await mutateTask(port, created.taskId, "/start", "POST",
+      "real-ws-task-start-key", actionBody(task.version, "Explicitly start the real WS canary"));
     const deadline = Date.now() + realWsObservationMs;
-    let detail;
+    const resolvedInteractionIds = new Set();
+    let terminalRun;
     do {
-      detail = await getWorkItem(port, created.workItemId);
-      if (["completed", "failed", "interrupted", "uncertain", "cancelled"].includes(detail.run.status)) {
+      task = await getTask(port, created.taskId);
+      terminalRun = task.runs.find((run) => run.runId === started.runId);
+      if (terminalRun
+          && ["completed", "failed", "interrupted", "uncertain", "cancelled"].includes(terminalRun.status)) {
         break;
+      }
+      if (realWsScenario.autoApproveInteractions) {
+        await approveBoundedCanaryInteractions(port, started, nodeState, resolvedInteractionIds);
       }
       await sleep(250);
     } while (Date.now() < deadline);
 
-    const runDirectory = join(nodeState, "runs", created.runId);
+    const runDirectory = join(nodeState, "runs", started.runId);
     const runtimeEvents = await readFile(join(runDirectory, "runtime-events.ndjson"), "utf8").catch(() => "");
     const stderr = await readFile(join(runDirectory, "runtime-stderr.log"), "utf8").catch(() => "");
+    const missionSnapshot = await readJson(join(runDirectory, "mission.json"));
+    const acceptanceReport = await readJson(join(runDirectory, "acceptance-report.json"));
     const sessionMatch = runtimeEvents.match(/"sessionID"\s*:\s*"([^"]+)"/);
     const wsSessionId = sessionMatch ? sessionMatch[1] : null;
-    const submittedTurns = Number(querySqlite(join(nodeState, "node.db"),
-      "SELECT COUNT(*) FROM control_turn"));
-    const finishedTurns = Number(querySqlite(join(nodeState, "node.db"),
-      "SELECT COUNT(*) FROM control_turn WHERE state='finished'"));
-    const terminalStatus = detail.run.status;
-    const isCompleted = terminalStatus === "completed";
+    const terminalStatus = terminalRun?.status ?? "not_terminal";
+    const acceptancePassed = acceptanceReport?.status === "PASSED"
+      && acceptanceReport.configured === true
+      && acceptanceReport.started === true
+      && acceptanceReport.finished === true
+      && acceptanceReport.exitCode === 0
+      && acceptanceReport.requiredArtifacts?.every((artifact) => artifact.present === true);
+    const isReviewReady = terminalStatus === "completed"
+      && task.businessStatus === "REVIEW"
+      && task.acceptanceStatus === "PENDING"
+      && acceptancePassed;
 
-    if (!isCompleted) {
+    if (!isReviewReady) {
       return {
-        workItemId: created.workItemId,
-        runId: created.runId,
-        missionDigest: created.missionDigest,
+        taskId: created.taskId,
+        workItemId: started.workItemId,
+        runId: started.runId,
+        missionDigest: missionSnapshot?.missionDigest ?? null,
         status: terminalStatus,
-        resultSummary: detail.run.resultSummary || null,
-        submittedTurns,
-        finishedTurns,
+        businessStatus: task.businessStatus,
+        acceptanceStatus: task.acceptanceStatus,
+        resultSummary: terminalRun?.resultSummary || null,
+        localAcceptanceStatus: acceptanceReport?.status ?? null,
+        sessionCount: Number(querySqlite(join(nodeState, "node.db"),
+          "SELECT COUNT(*) FROM control_agent_session")),
         wsSessionId,
         runtimeEventsBytes: Buffer.byteLength(runtimeEvents),
         runtimeStderrBytes: Buffer.byteLength(stderr),
         observationWindowMs: realWsObservationMs,
         developmentMode: realWsDevelopmentMode,
+        approvedInteractionCount: resolvedInteractionIds.size,
         nodeEvidenceDirectory: runDirectory,
-        blocker: "WS did not produce a trusted three-Turn terminal within the bounded observation window",
+        blocker: "WS did not reach a terminal projection within the bounded observation window",
         blockerEvidence: {
           terminalStatus,
           observationWindowExceeded: Date.now() >= deadline,
@@ -151,27 +180,41 @@ async function runRealWsScenario(scenarioDirectory) {
         serviceEvidenceClean: false,
         proof: {
           claim: "fail-closed",
-          reason: "Run did not reach completed status",
+          reason: "Run did not reach REVIEW/PENDING with an independent PASSED report",
           terminalStatus,
+          businessStatus: task.businessStatus,
+          acceptanceStatus: task.acceptanceStatus,
+          localAcceptanceStatus: acceptanceReport?.status ?? null,
         },
       };
     }
 
-    const webHtmlBeforeRestart = await renderProductionWeb(port, `/work-items/${created.workItemId}`);
+    const webHtmlBeforeRestart = await renderProductionWeb(port, `/tasks/${created.taskId}`);
     assert.ok(webHtmlBeforeRestart.includes(realWsScenario.title),
-      "Web render before restart did not contain the WorkItem title");
-    assert.match(webHtmlBeforeRestart, /已完成/);
+      "Web render before acceptance did not contain the Task title");
+    assert.match(webHtmlBeforeRestart, /待验收/);
+
+    task = await mutateTask(port, created.taskId, "/accept", "POST", "real-ws-task-accept-key", {
+      ...actionBody(task.version, "Human-scoped E2E client verified the independent local acceptance report"),
+      deliverySummary: "Real WS completed the canary and Node independently passed the configured acceptance profile",
+      commitSha: "0000000",
+      prUrl: "https://example.test/local-e2e/no-pr",
+    });
+    assert.equal(task.businessStatus, "DONE");
+    assert.equal(task.acceptanceStatus, "ACCEPTED");
 
     await stopChild(service);
     service = null;
     service = await startService({ scenarioDirectory, serviceDatabase, port });
 
-    const afterRestart = await getWorkItem(port, created.workItemId);
-    assert.equal(afterRestart.run.status, "completed");
+    const afterRestart = await getTask(port, created.taskId);
+    assert.equal(afterRestart.businessStatus, "DONE");
+    assert.equal(afterRestart.acceptanceStatus, "ACCEPTED");
+    assert.equal(afterRestart.runs.find((run) => run.runId === started.runId)?.status, "completed");
 
-    const webHtmlAfterRestart = await renderProductionWeb(port, `/work-items/${created.workItemId}`);
+    const webHtmlAfterRestart = await renderProductionWeb(port, `/tasks/${created.taskId}`);
     assert.ok(webHtmlAfterRestart.includes(realWsScenario.title),
-      "Web render after restart did not contain the WorkItem title");
+      "Web render after restart did not contain the Task title");
     assert.match(webHtmlAfterRestart, /已完成/);
 
     await stopChild(node);
@@ -188,18 +231,23 @@ async function runRealWsScenario(scenarioDirectory) {
     await assertServiceContainsNoLocalEvidence(serviceState, forbiddenEvidence);
 
     return {
-      workItemId: created.workItemId,
-      runId: created.runId,
-      missionDigest: created.missionDigest,
+      taskId: created.taskId,
+      workItemId: started.workItemId,
+      runId: started.runId,
+      missionDigest: missionSnapshot.missionDigest,
       status: terminalStatus,
-      resultSummary: detail.run.resultSummary || null,
-      submittedTurns,
-      finishedTurns,
+      businessStatus: afterRestart.businessStatus,
+      acceptanceStatus: afterRestart.acceptanceStatus,
+      resultSummary: terminalRun.resultSummary || null,
+      localAcceptanceStatus: acceptanceReport.status,
+      sessionCount: Number(querySqlite(join(nodeState, "node.db"),
+        "SELECT COUNT(*) FROM control_agent_session")),
       wsSessionId,
       runtimeEventsBytes: Buffer.byteLength(runtimeEvents),
       runtimeStderrBytes: Buffer.byteLength(stderr),
       observationWindowMs: realWsObservationMs,
       developmentMode: realWsDevelopmentMode,
+      approvedInteractionCount: resolvedInteractionIds.size,
       nodeEvidenceDirectory: runDirectory,
       blocker: null,
       webRenderedBeforeRestart: true,
@@ -211,10 +259,19 @@ async function runRealWsScenario(scenarioDirectory) {
       proof: {
         claim: "verified",
         completedBeforeRestart: terminalStatus,
-        completedAfterRestart: afterRestart.run.status,
+        completedAfterRestart: afterRestart.runs.find((run) => run.runId === started.runId)?.status,
+        reviewBeforeAcceptance: "REVIEW/PENDING",
+        acceptedBeforeRestart: "DONE/ACCEPTED",
+        acceptedAfterRestart: `${afterRestart.businessStatus}/${afterRestart.acceptanceStatus}`,
+        localAcceptanceReport: {
+          status: acceptanceReport.status,
+          configured: acceptanceReport.configured,
+          exitCode: acceptanceReport.exitCode,
+          requiredArtifacts: acceptanceReport.requiredArtifacts,
+        },
         titleMatchedBeforeRestart: webHtmlBeforeRestart.includes(realWsScenario.title),
         titleMatchedAfterRestart: webHtmlAfterRestart.includes(realWsScenario.title),
-        completedMarkerBeforeRestart: /已完成/.test(webHtmlBeforeRestart),
+        pendingAcceptanceMarkerBeforeRestart: /待验收/.test(webHtmlBeforeRestart),
         completedMarkerAfterRestart: /已完成/.test(webHtmlAfterRestart),
         sameDatabase: toForwardSlashes(serviceDatabase),
         samePort: port,
@@ -229,6 +286,34 @@ async function runRealWsScenario(scenarioDirectory) {
   } finally {
     await stopChild(node);
     await stopChild(service);
+  }
+}
+
+async function approveBoundedCanaryInteractions(port, started, nodeState, resolvedInteractionIds) {
+  const detail = await getWorkItem(port, started.workItemId);
+  const pending = detail.interactions.filter((interaction) => interaction.state === "pending"
+    && interaction.allowedDecisions.includes("APPROVE")
+    && !resolvedInteractionIds.has(interaction.interactionId));
+  if (pending.length === 0) return;
+  const missionSnapshot = await readJson(join(nodeState, "runs", started.runId, "mission.json"));
+  if (!missionSnapshot?.missionDigest) return;
+  for (const interaction of pending) {
+    await requestJson(port, `/api/client/v2/interactions/${interaction.interactionId}/resolution`, {
+      token: hermesToken,
+      method: "POST",
+      headers: { "Idempotency-Key": `real-ws-resolution-${interaction.interactionId}` },
+      body: {
+        interactionId: interaction.interactionId,
+        runId: started.runId,
+        checkpointId: interaction.checkpointId,
+        missionDigest: missionSnapshot.missionDigest,
+        decision: "APPROVE",
+        responseSummary: "Approved only for the isolated temporary real-WS canary workspace",
+        resolvedBy: "e2e_user",
+        resolvedAt: new Date().toISOString(),
+      },
+    });
+    resolvedInteractionIds.add(interaction.interactionId);
   }
 }
 
@@ -257,19 +342,19 @@ async function runFlowScenario(scenarioDirectory) {
     await stopChild(service);
     service = null;
     await waitFor(async () => {
-      const turnCount = Number(querySqlite(join(nodeState, "node.db"),
-        "SELECT COUNT(*) FROM control_turn WHERE state='finished'"));
       const outboxCount = Number(querySqlite(join(nodeState, "node.db"),
         "SELECT COUNT(*) FROM control_outbox"));
-      return turnCount >= 3 && outboxCount > 0 ? { turnCount, outboxCount } : null;
-    }, 30_000, "Runtime to finish three Turns while Service is offline");
+      const terminalCount = Number(querySqlite(join(nodeState, "node.db"),
+        "SELECT COUNT(*) FROM control_local_event WHERE event_type='RUN_TERMINAL'"));
+      return terminalCount === 1 && outboxCount > 0 ? { terminalCount, outboxCount } : null;
+    }, 30_000, "Runtime and independent acceptance to finish while Service is offline");
 
     service = await startService({ scenarioDirectory, serviceDatabase, port });
     const completed = await waitFor(async () => {
       const detail = await getWorkItem(port, created.workItemId);
       return detail.run.status === "completed" ? detail : null;
     }, 40_000, "FLOW outbox replay to complete the Run");
-    assert.equal(completed.run.resultSummary, "Three deterministic turns passed the frozen acceptance checks");
+    assert.equal(completed.run.resultSummary, "Independent deterministic fake acceptance checks passed");
     assert.equal(completed.run.resumable, false);
 
     await waitFor(() => Number(querySqlite(join(nodeState, "node.db"),
@@ -278,8 +363,6 @@ async function runFlowScenario(scenarioDirectory) {
     assert.equal(missionSnapshot.missionDigest, created.missionDigest);
     assert.equal(Number(querySqlite(join(nodeState, "node.db"),
       "SELECT COUNT(*) FROM control_agent_session")), 1);
-    assert.equal(Number(querySqlite(join(nodeState, "node.db"),
-      "SELECT COUNT(*) FROM control_turn WHERE state='finished'")), 3);
 
     await stopChild(service);
     service = await startService({ scenarioDirectory, serviceDatabase, port });
@@ -310,11 +393,162 @@ async function runFlowScenario(scenarioDirectory) {
       workItemId: created.workItemId,
       runId: created.runId,
       missionDigest: created.missionDigest,
-      turns: 3,
+      missionPrompts: 1,
       finalStatus: afterRestart.run.status,
       webRenderedCompleted: true,
       serviceRestarts: 2,
       nodeEvidenceFiles: evidenceFiles.sort(),
+    };
+  } finally {
+    await stopChild(node);
+    await stopChild(service);
+  }
+}
+
+async function runTaskBusinessLoopScenario(scenarioDirectory) {
+  await mkdir(scenarioDirectory, { recursive: true });
+  const port = await reservePort();
+  const serviceState = join(scenarioDirectory, "service");
+  const nodeState = join(scenarioDirectory, "node");
+  const workspace = join(scenarioDirectory, "workspace-sensitive-local-path");
+  await Promise.all([mkdir(serviceState), mkdir(nodeState), mkdir(workspace)]);
+  await writeFile(join(workspace, "context.md"), "Local-only Task context", "utf8");
+  const serviceDatabase = join(serviceState, "service.db");
+  let service = await startService({ scenarioDirectory, serviceDatabase, port });
+  let node = await startNode({
+    scenarioDirectory,
+    nodeState,
+    workspace,
+    port,
+    scenario: "FLOW",
+    turnDelay: "PT0.5S",
+  });
+
+  try {
+    await waitForNodeRegistration(port);
+    const created = await createTask(port, "task-create-key");
+    assert.equal(created.businessStatus, "DRAFT");
+    assert.equal(Number(querySqlite(serviceDatabase, "SELECT COUNT(*) FROM work_items")), 0);
+
+    let task = await getTask(port, created.taskId);
+    task = await mutateTask(port, created.taskId, "", "PUT", "task-edit-key", {
+      expectedVersion: task.version,
+      title: "E2E Task business loop edited",
+      objective: task.objective,
+      acceptanceSummary: task.acceptanceSummary,
+      sideEffectSummary: task.sideEffectSummary,
+      priority: task.priority,
+      targetNodeId: task.targetNodeId,
+      workspaceRef: task.workspaceRef,
+      contextRefs: task.contextRefs,
+      runtimeKind: task.runtimeKind,
+      executionProfile: task.executionProfile,
+      actor: "e2e_user",
+      reason: "Exercise the durable edit path before execution",
+    });
+    assert.equal(task.businessStatus, "DRAFT");
+    assert.equal(Number(querySqlite(serviceDatabase, "SELECT COUNT(*) FROM work_items")), 0);
+
+    task = await taskAction(port, created.taskId, "mark-ready", "task-ready-key", task.version,
+      "Freeze the Task contract without starting WS");
+    assert.equal(task.businessStatus, "READY");
+    assert.equal(Number(querySqlite(serviceDatabase, "SELECT COUNT(*) FROM work_items")), 0);
+
+    const firstStartBody = actionBody(task.version, "Explicitly start the first execution");
+    const firstStart = await mutateTask(
+      port, created.taskId, "/start", "POST", "task-start-first-key", firstStartBody);
+    const duplicateStart = await mutateTask(
+      port, created.taskId, "/start", "POST", "task-start-first-key", firstStartBody);
+    assert.equal(duplicateStart.runId, firstStart.runId);
+    assert.equal(Number(querySqlite(serviceDatabase, "SELECT COUNT(*) FROM work_items")), 1);
+
+    task = await waitFor(async () => {
+      const detail = await getTask(port, created.taskId);
+      return detail.businessStatus === "REVIEW" && detail.acceptanceStatus === "PENDING"
+        ? detail
+        : null;
+    }, 40_000, "first Task Run to enter REVIEW/PENDING");
+    assert.equal(task.runs.length, 1);
+    assert.ok(task.timeline.filter((event) => event.eventType === "RUN_PROGRESS_UPDATED").length >= 2);
+    assert.equal(Number(querySqlite(join(nodeState, "node.db"),
+      "SELECT COUNT(*) FROM control_agent_session")), 1);
+    const webBeforeRestart = await renderProductionWeb(port, `/tasks/${created.taskId}`);
+    assert.match(webBeforeRestart, /业务状态/);
+    assert.match(webBeforeRestart, /验收状态/);
+    assert.match(webBeforeRestart, /待验收/);
+
+    task = await taskAction(port, created.taskId, "request-changes", "task-changes-key",
+      task.version, "The first delivery needs another execution");
+    assert.equal(task.businessStatus, "READY");
+    assert.equal(task.acceptanceStatus, "CHANGES_REQUESTED");
+    const secondStart = await mutateTask(port, created.taskId, "/start", "POST",
+      "task-start-second-key", actionBody(task.version, "Explicitly start the second execution"));
+    assert.notEqual(secondStart.runId, firstStart.runId);
+
+    task = await waitFor(async () => {
+      const detail = await getTask(port, created.taskId);
+      return detail.businessStatus === "REVIEW" && detail.runs.length === 2 ? detail : null;
+    }, 40_000, "second Task Run to preserve history and enter REVIEW");
+    assert.deepEqual(task.runs.map((run) => run.missionRevision), [2, 1]);
+    assert.equal(Number(querySqlite(join(nodeState, "node.db"),
+      "SELECT COUNT(*) FROM control_agent_session")), 2);
+
+    task = await mutateTask(port, created.taskId, "/accept", "POST", "task-accept-key", {
+      ...actionBody(task.version, "Human verified delivery, commit, and PR"),
+      deliverySummary: "Two durable fake Runs completed and history was preserved",
+      commitSha: "abcdef1234567890",
+      prUrl: "https://example.com/lingfeng/pull/5",
+    });
+    assert.equal(task.businessStatus, "DONE");
+    assert.equal(task.acceptanceStatus, "ACCEPTED");
+
+    task = await taskAction(port, created.taskId, "archive", "task-archive-first-key",
+      task.version, "Archive the accepted Task");
+    assert.equal(task.businessStatus, "ARCHIVED");
+    assert.equal((await getTask(port, created.taskId)).runs.length, 2);
+    task = await taskAction(port, created.taskId, "restore", "task-restore-key",
+      task.version, "Verify archive restore without losing history");
+    assert.equal(task.businessStatus, "DONE");
+
+    await stopChild(service);
+    service = null;
+    service = await startService({ scenarioDirectory, serviceDatabase, port });
+    const afterRestart = await getTask(port, created.taskId);
+    assert.equal(afterRestart.businessStatus, "DONE");
+    assert.equal(afterRestart.runs.length, 2);
+    assert.ok(afterRestart.timeline.length >= task.timeline.length);
+    const webAfterRestart = await renderProductionWeb(port, `/tasks/${created.taskId}`);
+    assert.match(webAfterRestart, /E2E Task business loop edited/);
+    assert.ok((webAfterRestart.match(/Fake Mission reached its completion checkpoint/g) ?? []).length >= 2);
+
+    const archived = await taskAction(port, created.taskId, "archive", "task-archive-final-key",
+      afterRestart.version, "Leave the completed Task archived");
+    assert.equal(archived.businessStatus, "ARCHIVED");
+    await stopChild(node);
+    node = null;
+    await stopChild(service);
+    service = null;
+    await assertServiceContainsNoLocalEvidence(serviceState, [
+      workspace,
+      "fake-session:",
+      "runtime-events.ndjson",
+      "conversation.ndjson",
+    ]);
+
+    return {
+      taskId: created.taskId,
+      firstRunId: firstStart.runId,
+      secondRunId: secondStart.runId,
+      finalBusinessStatus: archived.businessStatus,
+      acceptanceStatus: archived.acceptanceStatus,
+      runCount: archived.runs.length,
+      progressEventCount: archived.timeline.filter(
+        (event) => event.eventType === "RUN_PROGRESS_UPDATED").length,
+      timelineEventCount: archived.timeline.length,
+      serviceRestarts: 1,
+      webRenderedBeforeRestart: true,
+      webRenderedAfterRestart: true,
+      serviceEvidenceClean: true,
     };
   } finally {
     await stopChild(node);
@@ -424,7 +658,7 @@ async function runNotificationScenario(scenarioDirectory) {
       const interaction = detail.interactions.find((candidate) => candidate.interactionId === pendingInteraction.interactionId);
       return detail.run.status === "completed" && interaction?.state === "consumed" ? detail : null;
     }, 40_000, "Interaction response to be consumed by the same Session");
-    assert.equal(completed.run.resultSummary, "Three deterministic turns passed the frozen acceptance checks");
+    assert.equal(completed.run.resultSummary, "Independent deterministic fake acceptance checks passed");
 
     await requestJson(port, `/api/client/v2/interactions/${pendingInteraction.interactionId}/resolution`, {
       token: hermesToken,
@@ -558,9 +792,30 @@ async function startNode({
   scenario,
   turnDelay,
   runtimeKind = "fake-session",
-  wsExecutable = "ws",
+  wsBaseUri,
+  wsExpectedVersion,
+  acceptanceProfile,
 }) {
   const log = createWriteStream(join(scenarioDirectory, "node.log"), { flags: "a" });
+  const nodeEnvironment = acceptanceProfile
+    ? {
+        ...process.env,
+        SPRING_APPLICATION_JSON: JSON.stringify({
+          workbench: {
+            acceptance: {
+              profiles: {
+                [acceptanceProfile.profileId]: {
+                  command: acceptanceProfile.command,
+                  timeout: acceptanceProfile.timeout,
+                  requiredArtifacts: acceptanceProfile.requiredArtifacts,
+                  maxOutputBytes: acceptanceProfile.maxOutputBytes,
+                },
+              },
+            },
+          },
+        }),
+      }
+    : process.env;
   const child = spawn(javaExecutable, [
     "-jar", nodeJar,
     `--workbench.node.node-id=${nodeId}`,
@@ -575,7 +830,10 @@ async function startNode({
     "--workbench.node.backoff-initial=PT0.2S",
     "--workbench.node.backoff-maximum=PT1S",
     `--workbench.node.runtime-kind=${runtimeKind}`,
-    `--workbench.node.ws-executable=${wsExecutable}`,
+    ...(runtimeKind === "ws" ? [
+      `--workbench.node.ws-base-uri=${wsBaseUri}`,
+      `--workbench.node.ws-expected-version=${wsExpectedVersion}`,
+    ] : []),
     ...(runtimeKind === "fake-session" ? [
       `--workbench.node.fake-scenario=${scenario}`,
       `--workbench.node.fake-turn-delay=${turnDelay}`,
@@ -583,9 +841,11 @@ async function startNode({
     `--workbench.node.trust-store=${tls.trustStore}`,
     `--workbench.node.trust-store-password-file=${tls.trustStorePasswordFile}`,
     `--workbench.node.workspaces.${workspaceRef}=${workspace}`,
+    `--workbench.context-registry.entries.context_main=${workspace}`,
+    `--workbench.context-registry.allowed-roots[0]=${workspace}`,
   ], {
     cwd: scenarioDirectory,
-    env: process.env,
+    env: nodeEnvironment,
     stdio: ["ignore", "pipe", "pipe"],
   });
   child.stdout.pipe(log, { end: false });
@@ -607,8 +867,8 @@ async function createWorkItem(
     idempotencyKey,
     title,
     runtimeKind = "fake-session",
-    objective = "Complete three deterministic Turns using one local Agent Session",
-    acceptanceSummary = "Matching digest and explicit SUCCEEDED PASSED terminal",
+    objective = "Complete one deterministic Mission using one local Agent Session",
+    acceptanceSummary = "Independent deterministic fake acceptance checks pass",
     authorizedSideEffectsSummary = "Local temporary evidence only",
   },
 ) {
@@ -634,6 +894,55 @@ async function createWorkItem(
 
 async function getWorkItem(port, workItemId) {
   return requestJson(port, `/api/client/v2/work-items/${workItemId}`, { token: sitesToken });
+}
+
+async function createTask(port, idempotencyKey, overrides = {}) {
+  return requestJson(port, "/api/tasks/v1/tasks", {
+    token: creatorToken,
+    method: "POST",
+    expectedStatus: 201,
+    headers: { "Idempotency-Key": idempotencyKey },
+    body: {
+      title: overrides.title ?? "E2E Task business loop",
+      objective: overrides.objective
+        ?? "Complete a durable Task through two explicit fake Runtime executions",
+      acceptanceSummary: overrides.acceptanceSummary
+        ?? "Each successful Run enters REVIEW/PENDING and only a human action enters DONE",
+      sideEffectSummary: overrides.sideEffectSummary
+        ?? "Write local temporary evidence only; do not commit, push, deploy, or send messages",
+      priority: 0,
+      targetNodeId: nodeId,
+      workspaceRef,
+      contextRefs: [{ ref: "context_main", label: "Local E2E context" }],
+      runtimeKind: overrides.runtimeKind ?? "fake-session",
+      executionProfile: overrides.executionProfile ?? "spm-change-v1",
+      dataBoundaryAcknowledged: true,
+      actor: "e2e_user",
+      reason: "Create a durable Task draft",
+    },
+  });
+}
+
+async function getTask(port, taskId) {
+  return requestJson(port, `/api/tasks/v1/tasks/${taskId}`, { token: creatorToken });
+}
+
+async function taskAction(port, taskId, action, idempotencyKey, expectedVersion, reason) {
+  return mutateTask(port, taskId, `/${action}`, "POST", idempotencyKey,
+    actionBody(expectedVersion, reason));
+}
+
+async function mutateTask(port, taskId, suffix, method, idempotencyKey, body) {
+  return requestJson(port, `/api/tasks/v1/tasks/${taskId}${suffix}`, {
+    token: creatorToken,
+    method,
+    headers: { "Idempotency-Key": idempotencyKey },
+    body,
+  });
+}
+
+function actionBody(expectedVersion, reason) {
+  return { expectedVersion, actor: "e2e_user", reason };
 }
 
 async function requestJson(port, path, {
@@ -665,10 +974,12 @@ async function renderProductionWeb(port, path) {
   const previous = {
     baseUrl: process.env.WORKBENCH_SERVICE_BASE_URL,
     readToken: process.env.WORKBENCH_SERVICE_READ_TOKEN,
+    writeToken: process.env.WORKBENCH_SERVICE_WRITE_TOKEN,
     timeout: process.env.WORKBENCH_SERVICE_TIMEOUT_MS,
   };
   process.env.WORKBENCH_SERVICE_BASE_URL = `https://localhost:${port}`;
   process.env.WORKBENCH_SERVICE_READ_TOKEN = sitesToken;
+  process.env.WORKBENCH_SERVICE_WRITE_TOKEN = creatorToken;
   process.env.WORKBENCH_SERVICE_TIMEOUT_MS = "5000";
   try {
     const workerUrl = pathToFileURL(webWorker);
@@ -692,6 +1003,7 @@ async function renderProductionWeb(port, path) {
   } finally {
     restoreEnvironment("WORKBENCH_SERVICE_BASE_URL", previous.baseUrl);
     restoreEnvironment("WORKBENCH_SERVICE_READ_TOKEN", previous.readToken);
+    restoreEnvironment("WORKBENCH_SERVICE_WRITE_TOKEN", previous.writeToken);
     restoreEnvironment("WORKBENCH_SERVICE_TIMEOUT_MS", previous.timeout);
   }
 }
@@ -731,23 +1043,6 @@ async function waitFor(action, timeoutMs, label) {
   throw new Error(`Timed out waiting for ${label}${lastError ? `: ${lastError.message}` : ""}`);
 }
 
-function resolveWsExecutable() {
-  const configured = process.env.WORKBENCH_WS_EXECUTABLE?.trim();
-  if (configured) return configured;
-  if (process.platform !== "win32") return "ws";
-  const discovered = spawnSync("where.exe", ["ws.cmd"], {
-    encoding: "utf8",
-    windowsHide: true,
-  });
-  const executable = discovered.stdout
-    ?.split(/\r?\n/u)
-    .map((line) => line.trim())
-    .find(Boolean);
-  assert.equal(discovered.status, 0, "WS executable was not found on PATH");
-  assert.ok(executable, "WS executable was not found on PATH");
-  return executable;
-}
-
 function resolveRealWsObservationMs(developmentMode) {
   const defaultTimeoutMs = developmentMode ? 1_800_000 : 120_000;
   const maximumTimeoutMs = developmentMode ? 3_600_000 : 600_000;
@@ -770,6 +1065,8 @@ function resolveRealWsScenario(developmentMode) {
       objective: "Given shipment counts 17, 23, and 40, calculate the item count, total, and arithmetic mean, then verify the arithmetic",
       acceptanceSummary: "The verified result states count=3, total=80, and arithmetic mean=26.6666666667 (approximately 26.67)",
       authorizedSideEffectsSummary: "No tools, file changes, network requests, or external side effects",
+      executionProfile: "spm-change-v1",
+      acceptanceProfile: null,
     };
   }
   const required = (name) => {
@@ -777,13 +1074,65 @@ function resolveRealWsScenario(developmentMode) {
     assert.ok(value, `${name} is required for --real-ws-development`);
     return value;
   };
+  const acceptanceCommand = parseStringArray(
+    "WORKBENCH_REAL_WS_ACCEPTANCE_COMMAND_JSON",
+    required("WORKBENCH_REAL_WS_ACCEPTANCE_COMMAND_JSON"),
+    false,
+  );
+  const requiredArtifacts = parseStringArray(
+    "WORKBENCH_REAL_WS_REQUIRED_ARTIFACTS_JSON",
+    process.env.WORKBENCH_REAL_WS_REQUIRED_ARTIFACTS_JSON || "[]",
+    true,
+  );
+  const executionProfile = process.env.WORKBENCH_REAL_WS_ACCEPTANCE_PROFILE?.trim()
+    || "trusted-local-e2e-v1";
+  const maxOutputBytes = Number.parseInt(
+    process.env.WORKBENCH_REAL_WS_ACCEPTANCE_MAX_OUTPUT_BYTES || "262144",
+    10,
+  );
+  assert.ok(Number.isSafeInteger(maxOutputBytes) && maxOutputBytes >= 1024 && maxOutputBytes <= 1_048_576,
+    "WORKBENCH_REAL_WS_ACCEPTANCE_MAX_OUTPUT_BYTES must be from 1024 to 1048576");
   return {
     workspace: resolve(required("WORKBENCH_REAL_WS_WORKSPACE")),
     title: required("WORKBENCH_REAL_WS_TITLE"),
     objective: required("WORKBENCH_REAL_WS_OBJECTIVE"),
     acceptanceSummary: required("WORKBENCH_REAL_WS_ACCEPTANCE"),
     authorizedSideEffectsSummary: required("WORKBENCH_REAL_WS_AUTHORIZED_SIDE_EFFECTS"),
+    executionProfile,
+    acceptanceProfile: {
+      profileId: executionProfile,
+      command: acceptanceCommand,
+      timeout: process.env.WORKBENCH_REAL_WS_ACCEPTANCE_TIMEOUT?.trim() || "PT10M",
+      requiredArtifacts,
+      maxOutputBytes,
+    },
+    autoApproveInteractions:
+      process.env.WORKBENCH_REAL_WS_AUTO_APPROVE_INTERACTIONS?.trim().toLowerCase() === "true",
   };
+}
+
+function parseStringArray(name, value, allowEmpty) {
+  let parsed;
+  try {
+    parsed = JSON.parse(value);
+  } catch (error) {
+    throw new Error(`${name} must be a JSON string array`, { cause: error });
+  }
+  assert.ok(Array.isArray(parsed) && (allowEmpty || parsed.length > 0)
+    && parsed.every((entry) => typeof entry === "string" && entry.trim()),
+  `${name} must be ${allowEmpty ? "a" : "a non-empty"} JSON string array`);
+  return parsed;
+}
+
+async function readJson(path) {
+  const contents = await readFile(path, "utf8").catch(() => null);
+  return contents ? JSON.parse(contents) : null;
+}
+
+function requiredEnvironment(name) {
+  const value = process.env[name]?.trim();
+  assert.ok(value, `${name} is required`);
+  return value;
 }
 
 async function stopChild(child) {

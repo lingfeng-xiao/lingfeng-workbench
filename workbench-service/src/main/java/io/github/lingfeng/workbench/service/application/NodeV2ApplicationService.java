@@ -19,14 +19,19 @@ public class NodeV2ApplicationService {
   private final NodeRegistryRepository nodeRegistry;
   private final ObjectMapper mapper;
   private final V2ProtocolSupport protocol;
+  private final TaskExecutionProjectionService taskProjection;
   private final Clock clock = Clock.systemUTC();
 
   public NodeV2ApplicationService(
-      V2Repository repository, NodeRegistryRepository nodeRegistry, ObjectMapper mapper) {
+      V2Repository repository,
+      NodeRegistryRepository nodeRegistry,
+      ObjectMapper mapper,
+      TaskExecutionProjectionService taskProjection) {
     this.repository = repository;
     this.nodeRegistry = nodeRegistry;
     this.mapper = mapper;
     this.protocol = new V2ProtocolSupport(mapper);
+    this.taskProjection = taskProjection;
   }
 
   @Transactional
@@ -88,6 +93,7 @@ public class NodeV2ApplicationService {
     validateBinding(event, b);
     Instant now = clock.instant();
     apply(event, b, now);
+    taskProjection.project(event, b, now);
     repository.insertEvent(
         event.nodeId(), event.messageId(), event.eventType(), replay.hash(), now);
     repository.insertTimeline(

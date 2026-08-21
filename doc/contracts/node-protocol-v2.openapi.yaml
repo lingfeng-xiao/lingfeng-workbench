@@ -171,6 +171,11 @@ components:
             acceptanceSummary: { $ref: '#/components/schemas/ShortText' }
             authorizedSideEffectsSummary: { $ref: '#/components/schemas/ShortText' }
             workspaceRef: { $ref: '#/components/schemas/Identifier' }
+            contextRefs:
+              type: array
+              maxItems: 16
+              uniqueItems: true
+              items: { $ref: '#/components/schemas/Identifier' }
             runtimeKind: { $ref: '#/components/schemas/Identifier' }
             executionProfile: { $ref: '#/components/schemas/Identifier' }
       unevaluatedProperties: false

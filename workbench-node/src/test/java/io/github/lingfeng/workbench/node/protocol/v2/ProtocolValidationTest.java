@@ -16,6 +16,22 @@ class ProtocolValidationTest {
 
         assertThat(command).isInstanceOf(NodeCommand.StartRun.class);
         assertThat(command.binding().runId()).isEqualTo("run_001");
+        assertThat(((NodeCommand.StartRun) command).contextRefs()).isEmpty();
+    }
+
+    @Test
+    void acceptsOptionalSafeContextRefsAndRejectsDuplicates() {
+        var withContext = (com.fasterxml.jackson.databind.node.ObjectNode) startPayload().deepCopy();
+        withContext.putArray("contextRefs").add("context-design").add("context-tests");
+        var duplicate = (com.fasterxml.jackson.databind.node.ObjectNode) startPayload().deepCopy();
+        duplicate.putArray("contextRefs").add("context-design").add("context-design");
+
+        NodeCommand.StartRun command = (NodeCommand.StartRun)
+                ProtocolValidation.parseCommand(withContext, "node_alpha");
+
+        assertThat(command.contextRefs()).containsExactly("context-design", "context-tests");
+        assertThatThrownBy(() -> ProtocolValidation.parseCommand(duplicate, "node_alpha"))
+                .isInstanceOf(ProtocolClientException.class).hasMessageContaining("unique");
     }
 
     @Test

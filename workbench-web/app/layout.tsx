@@ -17,7 +17,7 @@ export const metadata: Metadata = {
     default: "Lingfeng Workbench",
     template: "%s · Lingfeng Workbench",
   },
-  description: "私有、只读的 Workbench 控制状态视图。",
+  description: "Task 驱动的私有 Workbench 控制面。",
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",

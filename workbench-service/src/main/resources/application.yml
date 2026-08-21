@@ -33,3 +33,5 @@ workbench:
   notification:
     lease-duration: 5m
     max-attempts: 3
+  task:
+    observation-stale-after: 30s

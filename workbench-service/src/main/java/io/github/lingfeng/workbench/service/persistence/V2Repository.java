@@ -59,6 +59,7 @@ public class V2Repository {
       String workspaceRef,
       String runtimeKind,
       String profile,
+      int missionRevision,
       String runId,
       String commandId,
       Instant now) {
@@ -75,7 +76,7 @@ public class V2Repository {
         "INSERT INTO missions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         missionId,
         workItemId,
-        1,
+        missionRevision,
         digest,
         objective,
         acceptance,

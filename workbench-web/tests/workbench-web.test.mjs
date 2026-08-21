@@ -9,6 +9,7 @@ const AUTHENTICATED_HEADERS = {
   "oai-authenticated-user-email": "owner@example.com",
 };
 const READ_TOKEN = "test-sites-read-token";
+const WRITE_TOKEN = "test-sites-write-token";
 const workerUrl = new URL("../dist/server/index.js", import.meta.url);
 workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
 const { default: worker } = await import(workerUrl.href);
@@ -38,43 +39,38 @@ test("requires both Sites identity headers before calling Service", async (conte
   }
 });
 
-test("uses only v2 read endpoints and a server-side bearer credential", async () => {
+test("uses the Task v1 read endpoint and a server-side read credential", async () => {
   const requests = [];
   const response = await renderWithFakeService("/", ({ method, path, authorization }) => {
     requests.push({ method, path, authorization });
-    if (path === "/api/client/v2/work-items?limit=50") return jsonResponse(workItems());
-    if (path === "/api/client/v2/nodes") return jsonResponse(nodes());
+    if (path === "/api/tasks/v1/tasks?limit=100") return jsonResponse(tasks());
     return jsonResponse(apiError(), 404);
   });
 
   assert.equal(response.status, 200);
   const html = await response.text();
-  assert.match(html, /工作正在什么位置/);
+  assert.match(html, /以 Task 为中心的工作池/);
   assert.doesNotMatch(html, new RegExp(READ_TOKEN));
   assert.deepEqual(
-    requests.map(({ method, path }) => ({ method, path })).sort((left, right) => left.path.localeCompare(right.path)),
-    [
-      { method: "GET", path: "/api/client/v2/nodes" },
-      { method: "GET", path: "/api/client/v2/work-items?limit=50" },
-    ],
+    requests.map(({ method, path }) => ({ method, path })),
+    [{ method: "GET", path: "/api/tasks/v1/tasks?limit=100" }],
   );
   assert.ok(requests.every(({ authorization }) => authorization === `Bearer ${READ_TOKEN}`));
 });
 
-test("renders running, waiting, completed, uncertain, offline, and last-sync projections", async () => {
+test("renders Task business, attention, Node, stale, and last-observed projections", async () => {
   const response = await renderWithFakeService("/", ({ path }) => {
-    if (path === "/api/client/v2/work-items?limit=50") return jsonResponse(workItems());
-    if (path === "/api/client/v2/nodes") return jsonResponse(nodes());
+    if (path === "/api/tasks/v1/tasks?limit=100") return jsonResponse(tasks());
     return jsonResponse(apiError(), 404);
   });
   const html = await response.text();
 
   assert.match(html, /执行中/);
-  assert.match(html, /等待输入/);
-  assert.match(html, /合同校验完成/);
-  assert.match(html, /Service 网络恢复后等待终态确认/);
-  assert.match(html, /最后同步于/);
-  assert.match(html, /1\/2/);
+  assert.match(html, /待验收/);
+  assert.match(html, /执行失败/);
+  assert.match(html, /Node 离线/);
+  assert.match(html, /lastObservedAt/);
+  assert.match(html, /STALE/);
 });
 
 test("renders a completed v2 detail with timeline, interaction, and dead-letter notification", async () => {
@@ -161,7 +157,7 @@ test("renders online and offline Nodes with current Run and synchronization time
 
 test("renders empty states on every read-only surface", async (context) => {
   for (const [path, expected] of [
-    ["/", "现在没有活动工作"],
+    ["/", "现在没有 Task"],
     ["/interactions", "没有 Interaction"],
     ["/nodes", "还没有注册 Node"],
   ]) {
@@ -181,7 +177,7 @@ test("maps 401, 403, timeout, and 502 to bounded errors", async (context) => {
   }
 
   await context.test("read-only scope rejected with 403", async () => {
-    const response = await renderWithFakeService("/", ({ authorization }) => {
+    const response = await renderWithFakeService("/nodes", ({ authorization }) => {
       assert.equal(authorization, `Bearer ${READ_TOKEN}`);
       return jsonResponse(apiError("forbidden"), 403);
     });
@@ -207,15 +203,15 @@ test("fails closed for non-JSON, oversized, unknown-field, and unknown-state res
   const cases = [
     ["non-JSON", () => new Response("not json", { headers: { "content-type": "text/plain" } })],
     ["over 64 KiB", () => jsonResponse({ padding: "x".repeat(65 * 1024) })],
-    ["unknown field", () => jsonResponse([{ ...workItems()[0], runtimeSessionId: "session-secret" }])],
-    ["unknown state", () => jsonResponse([{ ...workItems()[0], status: "invented" }])],
+    ["unknown field", () => jsonResponse([{ ...tasks()[0], runtimeSessionId: "session-secret" }])],
+    ["unknown state", () => jsonResponse([{ ...tasks()[0], businessStatus: "invented" }])],
   ];
 
   for (const [name, respond] of cases) {
     await context.test(name, async () => {
       const response = await renderWithFakeService("/", ({ path }) => {
-        if (path.includes("work-items")) return respond();
-        return jsonResponse(nodes());
+        if (path.includes("/api/tasks/v1/tasks")) return respond();
+        return jsonResponse(apiError(), 404);
       });
       const html = await response.text();
       assert.match(html, /Service 响应不符合合同/);
@@ -252,6 +248,162 @@ test("never renders sensitive fields injected at detail or Node boundaries", asy
   });
 });
 
+test("renders Task, Run, and Acceptance as independent axes with two-run history and timeline", async () => {
+  const response = await renderWithFakeService("/tasks/task_review", ({ path, authorization }) => {
+    assert.equal(path, "/api/tasks/v1/tasks/task_review");
+    assert.equal(authorization, `Bearer ${READ_TOKEN}`);
+    return jsonResponse(taskDetail());
+  });
+  const html = await response.text();
+  for (const expected of [
+    "业务状态",
+    "执行状态",
+    "验收状态",
+    "REVIEW / PENDING",
+    "第一次执行失败",
+    "第二次执行完成",
+    "lastObservedAt",
+    "Run 完成，等待人工验收",
+    "Node",
+  ]) assert.match(html, new RegExp(expected));
+  assert.doesNotMatch(html, /C:\\|runtimeSessionId|rawRuntimeEvents|diff-secret|log-secret/);
+});
+
+test("Task detail polling forwards ETag and preserves Service 304", async () => {
+  const response = await renderWithFakeService("/api/tasks/task_review", ({ path, ifNoneMatch, authorization }) => {
+    assert.equal(path, "/api/tasks/v1/tasks/task_review");
+    assert.equal(ifNoneMatch, '"5"');
+    assert.equal(authorization, `Bearer ${READ_TOKEN}`);
+    return new Response(null, { status: 304, headers: { etag: '"5"' } });
+  }, {
+    requestInit: { headers: { "if-none-match": '"5"', accept: "application/json" } },
+  });
+  assert.equal(response.status, 304);
+  assert.equal(response.headers.get("etag"), '"5"');
+  assert.equal(response.headers.get("cache-control"), "no-store");
+});
+
+test("Task mutations fail closed without identity, same-origin proof, and CSRF header", async (context) => {
+  const validBody = JSON.stringify({ expectedVersion: 5, reason: "explicit action" });
+  const variants = [
+    ["missing identity", { origin: "http://localhost", "x-workbench-csrf": "1", "content-type": "application/json", "idempotency-key": "web_test" }, 401, false],
+    ["missing origin", { ...AUTHENTICATED_HEADERS, "x-workbench-csrf": "1", "content-type": "application/json", "idempotency-key": "web_test" }, 403, true],
+    ["cross origin", { ...AUTHENTICATED_HEADERS, origin: "https://evil.example", "x-workbench-csrf": "1", "content-type": "application/json", "idempotency-key": "web_test" }, 403, true],
+    ["missing custom header", { ...AUTHENTICATED_HEADERS, origin: "http://localhost", "content-type": "application/json", "idempotency-key": "web_test" }, 403, true],
+    ["cross-site metadata", { ...AUTHENTICATED_HEADERS, origin: "http://localhost", "sec-fetch-site": "cross-site", "x-workbench-csrf": "1", "content-type": "application/json", "idempotency-key": "web_test" }, 403, true],
+  ];
+  for (const [name, headers, status, identityIncluded] of variants) {
+    await context.test(name, async () => {
+      let serviceCalls = 0;
+      const response = await renderWithFakeService("/api/tasks/task_review/start", () => {
+        serviceCalls += 1;
+        return jsonResponse({});
+      }, { includeAuthentication: identityIncluded, requestInit: { method: "POST", headers, body: validBody } });
+      assert.equal(response.status, status);
+      assert.equal(serviceCalls, 0);
+    });
+  }
+});
+
+test("create injects actor and boundary confirmation while using only the write credential", async () => {
+  let serviceRequest;
+  const response = await renderWithFakeService("/api/tasks", (request) => {
+    serviceRequest = request;
+    return jsonResponse({ taskId: "task_created", version: 1, businessStatus: "DRAFT", createdAt: "2026-08-21T08:00:00Z" }, 201);
+  }, { requestInit: mutationRequest({
+    title: "Task create does not execute",
+    objective: "Create a durable Task draft",
+    acceptanceSummary: "No WorkItem before explicit start",
+    sideEffectSummary: "No external effects",
+    priority: 0,
+    targetNodeId: "office-pc",
+    workspaceRef: "lingfeng-workbench",
+    contextRefs: [{ ref: "product-freeze", label: "Frozen design" }],
+    runtimeKind: "opencode",
+    executionProfile: "default",
+    dataBoundaryAcknowledged: true,
+    reason: "create draft",
+  }, "web_create") });
+  assert.equal(response.status, 201);
+  assert.equal(serviceRequest.path, "/api/tasks/v1/tasks");
+  assert.equal(serviceRequest.authorization, `Bearer ${WRITE_TOKEN}`);
+  assert.equal(serviceRequest.idempotencyKey, "web_create");
+  const body = JSON.parse(serviceRequest.body);
+  assert.equal(body.dataBoundaryAcknowledged, true);
+  assert.match(body.actor, /^sites_user:[a-f0-9]{24}$/);
+  assert.doesNotMatch(serviceRequest.body, /user_test|owner@example.com/);
+});
+
+test("edit and explicit actions forward expectedVersion, reason, idempotency, and fixed paths", async (context) => {
+  await context.test("edit", async () => {
+    let captured;
+    const detail = taskDetail({ businessStatus: "DRAFT", acceptanceStatus: "NOT_REQUESTED", allowedActions: ["EDIT", "MARK_READY", "CANCEL"] });
+    const response = await renderWithFakeService("/api/tasks/task_review", (request) => {
+      captured = request;
+      return jsonResponse(detail);
+    }, { requestInit: { ...mutationRequest({
+      expectedVersion: 5,
+      title: detail.title,
+      objective: detail.objective,
+      acceptanceSummary: detail.acceptanceSummary,
+      sideEffectSummary: detail.sideEffectSummary,
+      priority: detail.priority,
+      targetNodeId: detail.targetNodeId,
+      workspaceRef: detail.workspaceRef,
+      contextRefs: detail.contextRefs,
+      runtimeKind: detail.runtimeKind,
+      executionProfile: detail.executionProfile,
+      reason: "edit contract",
+    }, "web_edit"), method: "PUT" } });
+    assert.equal(response.status, 200);
+    assert.equal(captured.path, "/api/tasks/v1/tasks/task_review");
+    assert.equal(captured.authorization, `Bearer ${WRITE_TOKEN}`);
+    assert.equal(JSON.parse(captured.body).expectedVersion, 5);
+  });
+
+  for (const action of ["mark-ready", "start", "accept", "request-changes", "archive", "restore"]) {
+    await context.test(action, async () => {
+      let captured;
+      const upstream = action === "start"
+        ? { taskId: "task_review", version: 6, workItemId: "wi_new", missionId: "mi_new", runId: "run_new", businessStatus: "IN_PROGRESS", startedAt: "2026-08-21T08:01:00Z" }
+        : taskDetail();
+      const actionBody = action === "accept"
+        ? { expectedVersion: 5, reason: "accept delivery", deliverySummary: "Verified locally", commitSha: "abcdef1", prUrl: "https://example.com/pr/1" }
+        : { expectedVersion: 5, reason: `explicit ${action}` };
+      const response = await renderWithFakeService(`/api/tasks/task_review/${action}`, (request) => {
+        captured = request;
+        return jsonResponse(upstream);
+      }, { requestInit: mutationRequest(actionBody, `web_${action}`) });
+      assert.equal(response.status, 200);
+      assert.equal(captured.path, `/api/tasks/v1/tasks/task_review/${action}`);
+      assert.equal(captured.authorization, `Bearer ${WRITE_TOKEN}`);
+      assert.equal(captured.idempotencyKey, `web_${action}`);
+      assert.equal(JSON.parse(captured.body).expectedVersion, 5);
+    });
+  }
+});
+
+test("BFF maps conflict, invalid JSON, oversized responses, and unknown fields to bounded errors", async (context) => {
+  await context.test("conflict", async () => {
+    const response = await renderWithFakeService("/api/tasks/task_review/start", () => jsonResponse({ message: "database details must not escape" }, 409), { requestInit: mutationRequest({ expectedVersion: 5, reason: "start" }, "web_conflict") });
+    assert.equal(response.status, 409);
+    assert.match(await response.text(), /数据已更新，请重新加载/);
+  });
+  for (const [name, upstream] of [
+    ["invalid JSON", new Response("not-json", { headers: { "content-type": "application/json" } })],
+    ["oversized", jsonResponse({ padding: "x".repeat(65 * 1024) })],
+    ["unknown field", jsonResponse({ ...taskDetail(), localAbsolutePath: "C:\\secret" })],
+  ]) {
+    await context.test(name, async () => {
+      const response = await renderWithFakeService("/api/tasks/task_review", () => upstream, { requestInit: { headers: { accept: "application/json" } } });
+      assert.equal(response.status, 502);
+      const body = await response.text();
+      assert.match(body, /Task Service 暂时不可用/);
+      assert.doesNotMatch(body, /C:\\secret|xxxxxx/);
+    });
+  }
+});
+
 test("keeps business routes no-store and preserves Sites metadata and Worker ESM", async () => {
   const response = await renderWithFakeService("/nodes", () => jsonResponse(nodes()));
   assert.equal(response.headers.get("cache-control"), "no-store");
@@ -283,7 +435,7 @@ test("keeps Service configuration and business state out of browser assets and s
   const combinedBrowserSource = browserSources.join("\n");
   assert.doesNotMatch(
     combinedBrowserSource,
-    /WORKBENCH_SERVICE_BASE_URL|WORKBENCH_SERVICE_READ_TOKEN|test-sites-read-token/,
+    /WORKBENCH_SERVICE_BASE_URL|WORKBENCH_SERVICE_READ_TOKEN|WORKBENCH_SERVICE_WRITE_TOKEN|test-sites-read-token|test-sites-write-token/,
   );
 
   const applicationSources = await Promise.all([
@@ -292,8 +444,12 @@ test("keeps Service configuration and business state out of browser assets and s
     readFile(new URL("../app/nodes/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/work-items/[id]/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/_lib/workbench-service.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/_lib/task-service.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/_components/TaskForm.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/_components/TaskDetailClient.tsx", import.meta.url), "utf8"),
   ]);
   assert.doesNotMatch(applicationSources.join("\n"), /localStorage|sessionStorage/);
+  assert.match(applicationSources.join("\n"), /4_000/);
 });
 
 async function renderWorker(path, { headers = AUTHENTICATED_HEADERS, baseUrl = "https://unused.example" } = {}) {
@@ -306,12 +462,15 @@ async function renderWorker(path, { headers = AUTHENTICATED_HEADERS, baseUrl = "
   );
 }
 
-async function renderWithFakeService(path, respond, { timeoutMs = 500 } = {}) {
+async function renderWithFakeService(path, respond, { timeoutMs = 500, requestInit = {}, includeAuthentication = true } = {}) {
   const fakeService = await startFakeService(respond);
   try {
     return await withServiceEnvironment({ baseUrl: fakeService.baseUrl, timeoutMs }, () =>
       worker.fetch(
-        new Request(`http://localhost${path}`, { headers: AUTHENTICATED_HEADERS }),
+        new Request(`http://localhost${path}`, {
+          ...requestInit,
+          headers: { ...(includeAuthentication ? AUTHENTICATED_HEADERS : {}), ...requestInit.headers },
+        }),
         workerEnvironment(),
         workerContext(),
       ),
@@ -325,16 +484,19 @@ async function withServiceEnvironment({ baseUrl, timeoutMs }, action) {
   const previous = {
     baseUrl: process.env.WORKBENCH_SERVICE_BASE_URL,
     readToken: process.env.WORKBENCH_SERVICE_READ_TOKEN,
+    writeToken: process.env.WORKBENCH_SERVICE_WRITE_TOKEN,
     timeout: process.env.WORKBENCH_SERVICE_TIMEOUT_MS,
   };
   process.env.WORKBENCH_SERVICE_BASE_URL = baseUrl;
   process.env.WORKBENCH_SERVICE_READ_TOKEN = READ_TOKEN;
+  process.env.WORKBENCH_SERVICE_WRITE_TOKEN = WRITE_TOKEN;
   process.env.WORKBENCH_SERVICE_TIMEOUT_MS = String(timeoutMs);
   try {
     return await action();
   } finally {
     restoreEnvironment("WORKBENCH_SERVICE_BASE_URL", previous.baseUrl);
     restoreEnvironment("WORKBENCH_SERVICE_READ_TOKEN", previous.readToken);
+    restoreEnvironment("WORKBENCH_SERVICE_WRITE_TOKEN", previous.writeToken);
     restoreEnvironment("WORKBENCH_SERVICE_TIMEOUT_MS", previous.timeout);
   }
 }
@@ -346,6 +508,9 @@ async function startFakeService(respond) {
         method: request.method,
         path: request.url,
         authorization: request.headers.authorization,
+        idempotencyKey: request.headers["idempotency-key"],
+        ifNoneMatch: request.headers["if-none-match"],
+        body: await readRequestBody(request),
       });
       response.writeHead(serviceResponse.status, Object.fromEntries(serviceResponse.headers));
       response.end(Buffer.from(await serviceResponse.arrayBuffer()));
@@ -371,6 +536,12 @@ async function startFakeService(respond) {
   };
 }
 
+async function readRequestBody(request) {
+  const chunks = [];
+  for await (const chunk of request) chunks.push(chunk);
+  return Buffer.concat(chunks).toString("utf8");
+}
+
 function jsonResponse(payload, status = 200) {
   return new Response(JSON.stringify(payload), {
     status,
@@ -378,40 +549,118 @@ function jsonResponse(payload, status = 200) {
   });
 }
 
-function workItems() {
+function mutationRequest(payload, idempotencyKey) {
+  return {
+    method: "POST",
+    headers: {
+      accept: "application/json",
+      "content-type": "application/json",
+      origin: "http://localhost",
+      "sec-fetch-site": "same-origin",
+      "x-workbench-csrf": "1",
+      "idempotency-key": idempotencyKey,
+    },
+    body: JSON.stringify(payload),
+  };
+}
+
+function tasks() {
   return [
-    workItem("wi_running", "验证多轮执行", "in_progress", {
-      phaseCode: "IMPLEMENTATION",
-      progressSummary: "执行中",
-      lastSyncedAt: "2026-08-20T08:10:00Z",
+    taskSummary("task_ready", "等待显式开始", "READY", "NOT_REQUESTED", "NONE"),
+    taskSummary("task_running", "正在执行闭环", "IN_PROGRESS", "NOT_REQUESTED", "NODE_OFFLINE", {
+      runStatus: "running",
+      progressSummary: "已完成合同解析",
+      lastObservedAt: "2026-08-21T07:10:00Z",
+      stale: true,
+      nodeStatus: "offline",
     }),
-    workItem("wi_waiting", "等待审批恢复", "in_progress", {
-      phaseCode: "CONTRACT_REVIEW",
-      progressSummary: "等待输入",
-      waitingInteractionCount: 1,
-      lastSyncedAt: "2026-08-20T08:11:00Z",
-    }),
-    workItem("wi_completed", "可信终态", "completed", {
-      phaseCode: "REPORTING",
-      progressSummary: "合同校验完成",
-      lastSyncedAt: "2026-08-20T08:12:00Z",
-    }),
-    workItem("wi_uncertain", "待核对终态", "attention_required", {
-      phaseCode: "BUILD_VALIDATION",
-      progressSummary: "Service 网络恢复后等待终态确认",
-      lastSyncedAt: "2026-08-20T08:13:00Z",
+    taskSummary("task_review", "等待人工验收", "REVIEW", "PENDING", "RUN_FAILED", {
+      runStatus: "completed",
+      progressSummary: "执行已结束，等待验收",
+      lastObservedAt: "2026-08-21T07:12:00Z",
     }),
   ];
 }
 
-function workItem(workItemId, title, status, optional = {}) {
+function taskSummary(taskId, title, businessStatus, acceptanceStatus, attentionState, optional = {}) {
   return {
-    workItemId,
+    taskId,
     title,
-    status,
     priority: 0,
+    targetNodeId: "office-pc",
+    businessStatus,
+    acceptanceStatus,
+    attentionState,
+    version: 3,
+    runStatus: null,
+    progressSummary: null,
+    lastObservedAt: null,
+    stale: false,
+    nodeStatus: "online",
     ...optional,
-    updatedAt: "2026-08-20T08:15:00Z",
+    updatedAt: "2026-08-21T07:15:00Z",
+  };
+}
+
+function taskDetail(overrides = {}) {
+  return {
+    taskId: "task_review",
+    title: "等待人工验收",
+    objective: "闭合 Task 到验收的最小链路",
+    acceptanceSummary: "两次进度后进入 REVIEW/PENDING",
+    sideEffectSummary: "只修改本地工作区，不提交或推送",
+    priority: 1,
+    targetNodeId: "office-pc",
+    workspaceRef: "lingfeng-workbench",
+    contextRefs: [{ ref: "product-freeze", label: "v0.5 冻结设计" }],
+    runtimeKind: "opencode",
+    executionProfile: "default",
+    businessStatus: "REVIEW",
+    acceptanceStatus: "PENDING",
+    attentionState: "NONE",
+    deliverySummary: null,
+    commitSha: null,
+    prUrl: null,
+    version: 5,
+    allowedActions: ["ACCEPT", "REQUEST_CHANGES", "ARCHIVE"],
+    nodeStatus: "online",
+    nodeLastHeartbeatAt: "2026-08-21T07:14:00Z",
+    runs: [
+      {
+        workItemId: "wi_first",
+        missionId: "mi_first",
+        runId: "run_first",
+        missionRevision: 1,
+        status: "failed",
+        phaseCode: "IMPLEMENTATION",
+        progressSummary: "第一次执行失败",
+        resultSummary: "需要修改",
+        lastObservedAt: "2026-08-21T07:11:00Z",
+        stale: false,
+        createdAt: "2026-08-21T07:00:00Z",
+      },
+      {
+        workItemId: "wi_second",
+        missionId: "mi_second",
+        runId: "run_second",
+        missionRevision: 2,
+        status: "completed",
+        phaseCode: "REPORTING",
+        progressSummary: "第二次执行完成",
+        resultSummary: "等待验收",
+        lastObservedAt: "2026-08-21T07:13:00Z",
+        stale: false,
+        createdAt: "2026-08-21T07:12:00Z",
+      },
+    ],
+    timeline: [
+      { eventId: "event_1", sequence: 1, eventType: "TASK_CREATED", summary: "Task 已创建", actor: "sites_user:abc", source: "USER", workItemId: null, missionId: null, runId: null, occurredAt: "2026-08-21T07:00:00Z" },
+      { eventId: "event_2", sequence: 2, eventType: "RUN_COMPLETED", summary: "Run 完成，等待人工验收", actor: "NODE", source: "NODE", workItemId: "wi_second", missionId: "mi_second", runId: "run_second", occurredAt: "2026-08-21T07:13:00Z" },
+    ],
+    createdAt: "2026-08-21T07:00:00Z",
+    updatedAt: "2026-08-21T07:15:00Z",
+    archivedAt: null,
+    ...overrides,
   };
 }
 

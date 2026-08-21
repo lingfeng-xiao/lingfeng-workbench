@@ -53,25 +53,19 @@ public final class ControlLoopStore {
                 state TEXT NOT NULL,
                 next_sequence INTEGER NOT NULL,
                 evidence_directory TEXT NOT NULL,
-                current_turn INTEGER NOT NULL DEFAULT 0,
                 terminal_sequence INTEGER,
                 updated_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS control_agent_session (
                 run_id TEXT PRIMARY KEY,
                 handle_ref TEXT NOT NULL,
+                runtime_identity TEXT NOT NULL,
+                runtime_version TEXT NOT NULL,
+                workspace_directory TEXT NOT NULL,
                 state TEXT NOT NULL,
                 resumable INTEGER NOT NULL,
                 checkpoint_id TEXT,
                 updated_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS control_turn (
-                run_id TEXT NOT NULL,
-                turn_id TEXT NOT NULL,
-                turn_number INTEGER NOT NULL,
-                state TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                PRIMARY KEY (run_id, turn_id)
             );
             CREATE TABLE IF NOT EXISTS control_interaction_binding (
                 interaction_id TEXT PRIMARY KEY,
@@ -164,19 +158,29 @@ public final class ControlLoopStore {
         updateRunState(runId, "opening_session");
     }
 
-    public synchronized void saveSession(String runId, String handleReference, boolean resumable) {
+    public synchronized void saveSession(
+            String runId,
+            io.github.lingfeng.workbench.node.runtime.session.SessionHandle handle,
+            boolean resumable) {
         try (Connection connection = connect()) {
             String now = now();
             try (PreparedStatement statement = connection.prepareStatement("""
-                    INSERT INTO control_agent_session (run_id, handle_ref, state, resumable, updated_at)
-                    VALUES (?, ?, 'open', ?, ?)
-                    ON CONFLICT(run_id) DO UPDATE SET handle_ref=excluded.handle_ref, state='open',
+                    INSERT INTO control_agent_session (
+                        run_id, handle_ref, runtime_identity, runtime_version, workspace_directory,
+                        state, resumable, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, 'open', ?, ?)
+                    ON CONFLICT(run_id) DO UPDATE SET handle_ref=excluded.handle_ref,
+                        runtime_identity=excluded.runtime_identity, runtime_version=excluded.runtime_version,
+                        workspace_directory=excluded.workspace_directory, state='open',
                         resumable=excluded.resumable, updated_at=excluded.updated_at
                     """)) {
                 statement.setString(1, runId);
-                statement.setString(2, handleReference);
-                statement.setInt(3, resumable ? 1 : 0);
-                statement.setString(4, now);
+                statement.setString(2, handle.opaqueReference());
+                statement.setString(3, handle.runtimeIdentity());
+                statement.setString(4, handle.runtimeVersion());
+                statement.setString(5, handle.workspaceDirectory());
+                statement.setInt(6, resumable ? 1 : 0);
+                statement.setString(7, now);
                 statement.executeUpdate();
             }
         } catch (SQLException exception) {
@@ -204,30 +208,6 @@ public final class ControlLoopStore {
                 event -> event.put("progressSummary", compactSummary(summary)), null);
     }
 
-    public synchronized void recordTurn(String runId, String turnId, int turnNumber, String state) {
-        try (Connection connection = connect(); PreparedStatement statement = connection.prepareStatement("""
-                INSERT INTO control_turn (run_id, turn_id, turn_number, state, updated_at)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(run_id, turn_id) DO UPDATE SET state=excluded.state, updated_at=excluded.updated_at
-                """)) {
-            statement.setString(1, runId);
-            statement.setString(2, turnId);
-            statement.setInt(3, turnNumber);
-            statement.setString(4, state);
-            statement.setString(5, now());
-            statement.executeUpdate();
-            try (PreparedStatement update = connection.prepareStatement(
-                    "UPDATE control_local_run SET current_turn=MAX(current_turn, ?), updated_at=? WHERE run_id=?")) {
-                update.setInt(1, turnNumber);
-                update.setString(2, now());
-                update.setString(3, runId);
-                update.executeUpdate();
-            }
-        } catch (SQLException exception) {
-            throw new LocalStateException("Unable to record Turn", exception);
-        }
-    }
-
     public synchronized void recordInteraction(
             String runId,
             String interactionId,
@@ -253,10 +233,14 @@ public final class ControlLoopStore {
                     insert.setString(4, run.binding().missionDigest());
                     insert.setString(5, nodeId);
                     insert.setString(6, now);
-                    insert.executeUpdate();
+                    if (insert.executeUpdate() == 0) {
+                        connection.rollback();
+                        return;
+                    }
                 }
                 try (PreparedStatement session = connection.prepareStatement("""
-                        UPDATE control_agent_session SET state='paused', checkpoint_id=?, updated_at=? WHERE run_id=?
+                        UPDATE control_agent_session SET state='waiting_interaction', checkpoint_id=?, updated_at=?
+                        WHERE run_id=?
                         """)) {
                     session.setString(1, checkpointId);
                     session.setString(2, now);
@@ -391,8 +375,9 @@ public final class ControlLoopStore {
 
     public Optional<RecoveryRun> activeRun() {
         try (Connection connection = connect(); PreparedStatement query = connection.prepareStatement("""
-                SELECT r.run_id, r.start_command_json, r.state, r.current_turn, r.evidence_directory,
-                       s.handle_ref, s.resumable, s.checkpoint_id
+                SELECT r.run_id, r.start_command_json, r.state, r.evidence_directory,
+                       s.handle_ref, s.runtime_identity, s.runtime_version, s.workspace_directory,
+                       s.resumable, s.checkpoint_id
                 FROM control_local_run r LEFT JOIN control_agent_session s ON s.run_id=r.run_id
                 WHERE r.state NOT IN ('completed','failed','interrupted','uncertain')
                 ORDER BY r.updated_at DESC LIMIT 1
@@ -405,8 +390,10 @@ public final class ControlLoopStore {
                 NodeCommand.StartRun command = (NodeCommand.StartRun) io.github.lingfeng.workbench.node.protocol.v2
                         .ProtocolValidation.parseCommand(commandJson, nodeId);
                 return Optional.of(new RecoveryRun(
-                        command, row.getString("state"), row.getInt("current_turn"),
-                        row.getString("handle_ref"), row.getInt("resumable") == 1,
+                        command, row.getString("state"), row.getString("handle_ref"),
+                        row.getString("runtime_identity"), row.getString("runtime_version"),
+                        row.getString("workspace_directory"),
+                        row.getInt("resumable") == 1,
                         row.getString("checkpoint_id"), Path.of(row.getString("evidence_directory"))));
             }
         } catch (SQLException | JsonProcessingException exception) {
@@ -781,6 +768,10 @@ public final class ControlLoopStore {
                 && acceptanceStatus == NormalizedRuntimeEvent.AcceptanceStatus.PASSED) {
             return "completed";
         }
+        if (runtimeOutcome == NormalizedRuntimeEvent.RuntimeOutcome.SUCCEEDED
+                && acceptanceStatus == NormalizedRuntimeEvent.AcceptanceStatus.FAILED) {
+            return "failed";
+        }
         return switch (runtimeOutcome) {
             case FAILED -> "failed";
             case INTERRUPTED -> "interrupted";
@@ -815,8 +806,10 @@ public final class ControlLoopStore {
     public record RecoveryRun(
             NodeCommand.StartRun command,
             String state,
-            int currentTurn,
             String sessionHandle,
+            String runtimeIdentity,
+            String runtimeVersion,
+            String workspaceDirectory,
             boolean resumable,
             String checkpointId,
             Path evidenceDirectory) {

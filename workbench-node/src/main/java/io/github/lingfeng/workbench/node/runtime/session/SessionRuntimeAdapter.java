@@ -13,26 +13,21 @@ public interface SessionRuntimeAdapter {
     CompletionStage<SessionHandle> openSession(
             SessionContext context, Consumer<NormalizedRuntimeEvent> eventSink);
 
-    CompletionStage<Void> submitTurn(
-            SessionHandle session, TurnInput turn, Consumer<NormalizedRuntimeEvent> eventSink);
+    CompletionStage<Void> submitMission(
+            SessionHandle session, MissionInput mission, Consumer<NormalizedRuntimeEvent> eventSink);
 
     CompletionStage<Void> provideInteractionResponse(
             SessionHandle session,
             InteractionInput response,
             Consumer<NormalizedRuntimeEvent> eventSink);
 
-    CompletionStage<Void> requestCheckpoint(
-            SessionHandle session, Consumer<NormalizedRuntimeEvent> eventSink);
-
-    CompletionStage<Void> pause(SessionHandle session, Consumer<NormalizedRuntimeEvent> eventSink);
-
-    CompletionStage<Void> resume(
-            SessionHandle session, String checkpointId, Consumer<NormalizedRuntimeEvent> eventSink);
+    CompletionStage<SessionInspection> reattach(
+            SessionHandle session,
+            SessionContext context,
+            Consumer<NormalizedRuntimeEvent> eventSink);
 
     CompletionStage<Void> cancel(
             SessionHandle session, String reasonSummary, Consumer<NormalizedRuntimeEvent> eventSink);
-
-    CompletionStage<SessionInspection> inspect(SessionHandle session);
 
     CompletionStage<Void> closeSession(
             SessionHandle session, Consumer<NormalizedRuntimeEvent> eventSink);

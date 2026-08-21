@@ -5,6 +5,7 @@ import io.github.lingfeng.workbench.node.connection.ProtocolClientException;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.regex.Pattern;
 
@@ -92,7 +93,7 @@ public final class ProtocolValidation {
                 "protocolVersion", "messageId", "nodeId", "sentAt", "commandAvailable", "commandType",
                 "commandId", "targetNodeId", "workItemId", "missionId", "runId", "missionDigest",
                 "missionRevision", "objective", "acceptanceSummary", "authorizedSideEffectsSummary",
-                "workspaceRef", "runtimeKind", "executionProfile"));
+                "workspaceRef", "contextRefs", "runtimeKind", "executionProfile"));
         JsonNode revision = payload.get("missionRevision");
         if (revision == null || !revision.canConvertToInt() || revision.intValue() < 1) {
             throw rejected("missionRevision must be a positive integer");
@@ -101,7 +102,29 @@ public final class ProtocolValidation {
                 messageId, commandId, nodeId, targetNodeId, sentAt, binding, revision.intValue(),
                 shortText(payload, "objective"), shortText(payload, "acceptanceSummary"),
                 shortText(payload, "authorizedSideEffectsSummary"), identifier(payload, "workspaceRef"),
+                contextRefs(payload),
                 identifier(payload, "runtimeKind"), identifier(payload, "executionProfile"), payload.deepCopy());
+    }
+
+    private static List<String> contextRefs(JsonNode payload) {
+        JsonNode values = payload.get("contextRefs");
+        if (values == null) {
+            return List.of();
+        }
+        if (!values.isArray() || values.size() > 16) {
+            throw rejected("contextRefs must be an array with at most 16 values");
+        }
+        List<String> refs = new java.util.ArrayList<>();
+        values.forEach(value -> {
+            if (!value.isTextual() || !IDENTIFIER.matcher(value.textValue()).matches()) {
+                throw rejected("contextRefs must contain protocol identifiers");
+            }
+            refs.add(value.textValue());
+        });
+        if (new HashSet<>(refs).size() != refs.size()) {
+            throw rejected("contextRefs must be unique");
+        }
+        return List.copyOf(refs);
     }
 
     private static NodeCommand parseResponse(

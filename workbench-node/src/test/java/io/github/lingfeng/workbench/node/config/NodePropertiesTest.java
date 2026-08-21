@@ -21,6 +21,9 @@ class NodePropertiesTest {
         NodeProperties properties = properties(URI.create("https://service.example/"), Map.of("sandbox", workspace));
 
         assertThat(properties.resolveWorkspace("sandbox")).isEqualTo(workspace.toAbsolutePath().normalize());
+        assertThat(properties.wsAgent()).isEqualTo("build");
+        assertThat(properties.wsProviderId()).isEqualTo("workspace");
+        assertThat(properties.wsModelId()).isEqualTo("gpt-5.6-luna");
     }
 
     @Test
@@ -39,6 +42,19 @@ class NodePropertiesTest {
                 .hasMessageContaining("not configured");
     }
 
+    @Test
+    void rejectsMissingWsPromptTarget() {
+        assertThatThrownBy(() -> new NodeProperties(
+                "office-pc", "Office PC", URI.create("https://service.example/"), "x".repeat(32),
+                temporaryDirectory.resolve("state"), Duration.ofSeconds(5), Duration.ofSeconds(20),
+                "ws", URI.create("http://127.0.0.1:4096/"), "0.0.0--test",
+                "build", "workspace", "", Duration.ofSeconds(2), Duration.ofSeconds(1), Map.of(),
+                Duration.ofSeconds(15), Duration.ofSeconds(10), Duration.ofSeconds(1), Duration.ofSeconds(30),
+                null, null, null, null, "FLOW", Duration.ofMillis(100)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("wsModelId");
+    }
+
     private NodeProperties properties(URI serviceUri, Map<String, Path> workspaces) {
         return new NodeProperties(
                 "office-pc",
@@ -49,7 +65,8 @@ class NodePropertiesTest {
                 Duration.ofSeconds(5),
                 Duration.ofSeconds(20),
                 "ws",
-                "ws",
+                URI.create("http://127.0.0.1:4096/"),
+                "0.0.0--test",
                 workspaces);
     }
 }

@@ -3,3 +3,5 @@ databaseChangeLog:
       file: db/changelog/001-initial.sql
   - include:
       file: db/changelog/002-control-loop-v2.sql
+  - include:
+      file: db/changelog/003-task-business-loop.sql

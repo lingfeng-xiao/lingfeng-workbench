@@ -498,12 +498,12 @@ class WorkbenchServiceV2IntegrationTest {
   @Order(5)
   void appliesForwardMigrationWithForeignKeysAndSurvivesRepeatedQueries() {
     assertThat(jdbc.queryForObject("SELECT count(*) FROM DATABASECHANGELOG", Integer.class))
-        .isEqualTo(2);
+        .isEqualTo(3);
     assertThat(jdbc.queryForObject("PRAGMA foreign_keys", Integer.class)).isEqualTo(1);
     assertThat(jdbc.queryForObject("SELECT count(*) FROM control_commands", Integer.class))
         .isGreaterThanOrEqualTo(3);
     assertThat(jdbc.queryForObject("SELECT count(*) FROM DATABASECHANGELOG", Integer.class))
-        .isEqualTo(2);
+        .isEqualTo(3);
   }
 
   private JsonNode create(String key) throws Exception {
